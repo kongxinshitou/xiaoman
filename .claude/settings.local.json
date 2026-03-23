@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Skill(update-config)",
+      "Bash(gh auth:*)"
+    ]
+  }
+}
