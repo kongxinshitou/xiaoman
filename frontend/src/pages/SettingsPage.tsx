@@ -18,6 +18,9 @@ import {
   Row,
   Col,
   Statistic,
+  Alert,
+  Divider,
+  Badge,
 } from 'antd'
 import {
   PlusOutlined,
@@ -27,17 +30,23 @@ import {
   BarChartOutlined,
   DeleteOutlined,
   EditOutlined,
+  WechatOutlined,
+  PlayCircleOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  CopyOutlined,
 } from '@ant-design/icons'
 import type { LLMProvider, LLMProviderCreate } from '../types/llm'
 import type { MCPTool, MCPToolCreate } from '../types/mcp'
 import type { Skill } from '../types/skill'
+import type { FeishuConfig } from '../types/feishu'
 import { llmProvidersApi } from '../api/llmProviders'
 import { mcpToolsApi } from '../api/mcpTools'
 import { skillsApi } from '../api/skills'
+import { feishuApi } from '../api/feishu'
 import ProviderCard from '../components/llm/ProviderCard'
 import ProviderForm from '../components/llm/ProviderForm'
 import client from '../api/client'
-import dayjs from 'dayjs'
 
 const { Title, Text } = Typography
 
@@ -57,6 +66,17 @@ export default function SettingsPage() {
   const [skills, setSkills] = useState<Skill[]>([])
   const [stats, setStats] = useState<SystemStats | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
+  // Feishu state
+  const [feishuConfig, setFeishuConfig] = useState<FeishuConfig | null>(null)
+  const [feishuForm] = Form.useForm()
+  const [feishuLoading, setFeishuLoading] = useState(false)
+  const [feishuTesting, setFeishuTesting] = useState(false)
+  const [feishuTestStatus, setFeishuTestStatus] = useState<'ok' | 'fail' | null>(null)
+  // MCP execute test state
+  const [execToolId, setExecToolId] = useState<string | null>(null)
+  const [execQuery, setExecQuery] = useState('')
+  const [execOutput, setExecOutput] = useState('')
+  const [execRunning, setExecRunning] = useState(false)
 
   // Provider form
   const [providerFormOpen, setProviderFormOpen] = useState(false)
@@ -81,18 +101,100 @@ export default function SettingsPage() {
 
   const loadAll = async () => {
     try {
-      const [pList, mList, sList, statsData] = await Promise.all([
+      const [pList, mList, sList, statsData, fsConfig] = await Promise.all([
         llmProvidersApi.list(),
         mcpToolsApi.list(),
         skillsApi.list(),
         client.get('/system/stats').then((r) => r.data),
+        feishuApi.getConfig().catch(() => null),
       ])
       setProviders(pList)
       setMcpTools(mList)
       setSkills(sList)
       setStats(statsData)
+      if (fsConfig) {
+        setFeishuConfig(fsConfig)
+        feishuForm.setFieldsValue({
+          app_id: fsConfig.app_id,
+          verify_token: fsConfig.verify_token,
+          encrypt_key: fsConfig.encrypt_key,
+          default_push_chat_id: fsConfig.default_push_chat_id,
+          enabled: fsConfig.enabled,
+        })
+      }
     } catch (err) {
       console.error(err)
+    }
+  }
+
+  // ── Feishu actions ──
+  const handleFeishuSave = async () => {
+    const values = await feishuForm.validateFields()
+    try {
+      setFeishuLoading(true)
+      const updated = await feishuApi.updateConfig(values)
+      setFeishuConfig(updated)
+      message.success('飞书配置已保存')
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setFeishuLoading(false)
+    }
+  }
+
+  const handleFeishuTest = async () => {
+    setFeishuTesting(true)
+    setFeishuTestStatus(null)
+    try {
+      const res = await feishuApi.testConnection()
+      setFeishuTestStatus(res.status === 'ok' ? 'ok' : 'fail')
+      if (res.status === 'ok') message.success(res.message)
+      else message.error(res.message)
+    } catch {
+      setFeishuTestStatus('fail')
+      message.error('测试失败')
+    } finally {
+      setFeishuTesting(false)
+    }
+  }
+
+  // ── MCP Execute Test ──
+  const handleMcpExecute = async (tool: MCPTool) => {
+    setExecToolId(tool.id)
+    setExecOutput('')
+    setExecRunning(true)
+    const token = localStorage.getItem('token')
+    try {
+      const response = await fetch(`/api/v1/mcp-tools/${tool.id}/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ query: execQuery || '测试执行' }),
+      })
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            try {
+              const data = JSON.parse(line.slice(5).trim())
+              if (data.output) setExecOutput((prev) => prev + data.output + '\n')
+            } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      setExecOutput(`执行失败: ${e}`)
+    } finally {
+      setExecRunning(false)
     }
   }
 
@@ -256,6 +358,10 @@ export default function SettingsPage() {
       render: (_: unknown, t: MCPTool) => (
         <Space>
           <Button size="small" onClick={() => handleMcpPing(t.id, t.display_name || t.name)}>Ping</Button>
+          <Button size="small" icon={<PlayCircleOutlined />} type="primary" ghost
+            onClick={() => { setExecToolId(t.id); setExecOutput(''); setExecQuery(''); }}>
+            执行
+          </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditingMcp(t)
             mcpForm.setFieldsValue(t)
@@ -466,7 +572,135 @@ export default function SettingsPage() {
         </div>
       ),
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    {
+      key: 'feishu',
+      label: <span><WechatOutlined /> 飞书集成</span>,
+      children: (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <Title level={5} style={{ margin: 0 }}>飞书机器人集成</Title>
+            {feishuConfig && (
+              <Badge
+                status={feishuConfig.enabled ? 'success' : 'default'}
+                text={feishuConfig.enabled ? '已启用' : '未启用'}
+              />
+            )}
+          </div>
+
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 20 }}
+            message="配置说明"
+            description={
+              <div>
+                <p style={{ margin: '4px 0' }}>1. 在飞书开放平台创建企业自建应用，获取 App ID 和 App Secret</p>
+                <p style={{ margin: '4px 0' }}>2. 开通「机器人」能力，在「事件订阅」中填写以下 Webhook 地址：</p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0' }}>
+                  <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: 4, flex: 1 }}>
+                    {window.location.origin}/api/v1/feishu/webhook
+                  </code>
+                  <Button size="small" icon={<CopyOutlined />}
+                    onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/v1/feishu/webhook`); message.success('已复制') }}>
+                    复制
+                  </Button>
+                </div>
+                <p style={{ margin: '4px 0' }}>3. 订阅事件：<code>im.message.receive_v1</code></p>
+                <p style={{ margin: '4px 0' }}>4. 填写下方配置并保存，然后点击「测试连接」验证</p>
+              </div>
+            }
+          />
+
+          <Form form={feishuForm} layout="vertical">
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item name="app_id" label="App ID" rules={[{ required: false }]}>
+                  <Input placeholder="cli_xxxxxxxxxx" />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="app_secret" label="App Secret">
+                  <Input.Password placeholder={feishuConfig?.has_app_secret ? '已配置（留空不修改）' : '请输入 App Secret'} />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item name="verify_token" label="Verification Token（事件验证）">
+                  <Input placeholder="事件订阅页面中的 Verification Token" />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item name="encrypt_key" label="Encrypt Key（可选）">
+                  <Input placeholder="开启加密时填写" />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item name="default_push_chat_id" label="默认推送群 Chat ID（告警推送目标）">
+              <Input placeholder="oc_xxxxxxxxxx（在飞书群中查看群信息可获取）" />
+            </Form.Item>
+            <Form.Item name="enabled" label="启用飞书集成" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+
+            <Divider />
+
+            <Space>
+              <Button type="primary" loading={feishuLoading} onClick={handleFeishuSave}
+                style={{ background: 'linear-gradient(135deg, #4f46e5, #6366f1)', border: 'none' }}>
+                保存配置
+              </Button>
+              <Button
+                loading={feishuTesting}
+                onClick={handleFeishuTest}
+                icon={feishuTestStatus === 'ok' ? <CheckCircleOutlined style={{ color: '#22c55e' }} /> :
+                  feishuTestStatus === 'fail' ? <CloseCircleOutlined style={{ color: '#ef4444' }} /> : undefined}
+              >
+                测试连接
+              </Button>
+            </Space>
+          </Form>
+
+          <Divider>手动推送测试</Divider>
+          <FeishuPushPanel />
+        </div>
+      ),
+    },
   ]
+
+  function FeishuPushPanel() {
+    const [pushForm] = Form.useForm()
+    const [pushing, setPushing] = useState(false)
+    const doPush = async () => {
+      const vals = await pushForm.validateFields()
+      setPushing(true)
+      try {
+        await feishuApi.pushMessage(vals)
+        message.success('推送成功')
+        pushForm.resetFields()
+      } catch (e: unknown) {
+        const err = e as { response?: { data?: { detail?: string } } }
+        message.error(err?.response?.data?.detail || '推送失败')
+      } finally {
+        setPushing(false)
+      }
+    }
+    return (
+      <Form form={pushForm} layout="vertical" style={{ maxWidth: 480 }}>
+        <Form.Item name="title" label="消息标题" rules={[{ required: true }]}>
+          <Input placeholder="告警标题" />
+        </Form.Item>
+        <Form.Item name="content" label="消息内容" rules={[{ required: true }]}>
+          <Input.TextArea rows={3} placeholder="支持 Markdown 格式" />
+        </Form.Item>
+        <Form.Item name="chat_id" label="目标 Chat ID（留空使用默认群）">
+          <Input placeholder="oc_xxxxxxxxxx" />
+        </Form.Item>
+        <Button type="default" loading={pushing} onClick={doPush}>发送测试消息</Button>
+      </Form>
+    )
+  }
 
   return (
     <div style={{ padding: 24 }}>
@@ -582,10 +816,62 @@ export default function SettingsPage() {
           <Form.Item name="trigger_keywords" label="触发关键词 (JSON数组)" initialValue="[]">
             <Input.TextArea rows={2} placeholder='["关键词1", "关键词2"]' />
           </Form.Item>
+          <Form.Item name="trigger_keywords" label="触发关键词 (JSON数组, 可覆盖默认)" initialValue="[]">
+            <Input.TextArea rows={2} placeholder='["执行", "run", "deploy"]' />
+          </Form.Item>
+          <Form.Item name="config" label="技能配置 (JSON)" initialValue="{}">
+            <Input.TextArea rows={2} placeholder='{"tool_name": "k8s_logs"} 或 {"kb_ids": []}' />
+          </Form.Item>
           <Form.Item name="is_active" label="启用" valuePropName="checked" initialValue={true}>
             <Switch />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* MCP Execute Test Modal */}
+      <Modal
+        title={`测试执行: ${mcpTools.find((t) => t.id === execToolId)?.display_name || execToolId}`}
+        open={!!execToolId}
+        onCancel={() => { setExecToolId(null); setExecOutput(''); }}
+        footer={[
+          <Button key="close" onClick={() => { setExecToolId(null); setExecOutput(''); }}>关闭</Button>,
+          <Button key="run" type="primary" icon={<PlayCircleOutlined />}
+            loading={execRunning}
+            onClick={() => {
+              const tool = mcpTools.find((t) => t.id === execToolId)
+              if (tool) handleMcpExecute(tool)
+            }}>
+            执行
+          </Button>,
+        ]}
+        width={640}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Input
+            placeholder="输入查询/命令（留空则发送默认测试）"
+            value={execQuery}
+            onChange={(e) => setExecQuery(e.target.value)}
+            onPressEnter={() => {
+              const tool = mcpTools.find((t) => t.id === execToolId)
+              if (tool) handleMcpExecute(tool)
+            }}
+          />
+        </div>
+        {execOutput && (
+          <div style={{
+            background: '#0f172a', color: '#e2e8f0', borderRadius: 8,
+            padding: '12px 16px', fontFamily: 'monospace', fontSize: 13,
+            maxHeight: 320, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          }}>
+            {execOutput}
+            {execRunning && <span style={{ color: '#60a5fa' }}>▋</span>}
+          </div>
+        )}
+        {!execOutput && !execRunning && (
+          <div style={{ textAlign: 'center', color: '#94a3b8', padding: 24 }}>
+            点击「执行」按钮开始测试工具调用
+          </div>
+        )}
       </Modal>
     </div>
   )

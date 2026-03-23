@@ -3,7 +3,9 @@
     "allow": [
       "Bash(grep:*)",
       "Skill(update-config)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(gh repo:*)",
+      "Bash(python -c \":*)"
     ]
   }
 }

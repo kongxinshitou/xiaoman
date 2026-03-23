@@ -1,7 +1,10 @@
+import json
 from typing import List
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -10,9 +13,14 @@ from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.models.mcp_tool import MCPTool
 from app.schemas.mcp_tool import MCPToolCreate, MCPToolUpdate, MCPToolRead
-from app.services.mcp_service import ping_tool
+from app.services.mcp_service import ping_tool, execute_tool_stream
 
 router = APIRouter()
+
+
+class ExecuteRequest(BaseModel):
+    params: dict = {}
+    query: str = ""
 
 
 @router.post("", response_model=MCPToolRead)
@@ -105,3 +113,32 @@ async def ping_mcp_tool(
         raise HTTPException(status_code=404, detail="工具不存在")
     alive = await ping_tool(tool)
     return {"status": "online" if alive else "offline"}
+
+
+@router.post("/{tool_id}/execute")
+async def execute_mcp_tool(
+    tool_id: str,
+    body: ExecuteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """SSE 流式执行 MCP 工具，可在设置页面直接测试"""
+    result = await db.execute(select(MCPTool).where(MCPTool.id == tool_id))
+    tool = result.scalar_one_or_none()
+    if not tool:
+        raise HTTPException(status_code=404, detail="工具不存在")
+
+    params = body.params
+    if body.query and not params:
+        params = {"query": body.query}
+
+    async def event_generator():
+        async for event in execute_tool_stream(tool, params):
+            yield f"event: tool_status\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
