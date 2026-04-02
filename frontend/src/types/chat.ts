@@ -7,6 +7,12 @@ export interface ChatSession {
   updated_at: string
 }
 
+export interface WebResult {
+  title: string
+  url: string
+  snippet: string
+}
+
 export interface ChatMessage {
   id: string
   session_id: string
@@ -17,7 +23,10 @@ export interface ChatMessage {
   // Local-only fields
   isStreaming?: boolean
   citations?: Citation[]
-  toolCall?: ToolCallInfo
+  thinking?: string
+  toolCalls?: ToolCallInfo[]
+  webResults?: WebResult[]
+  isWebSearching?: boolean
 }
 
 export interface Citation {

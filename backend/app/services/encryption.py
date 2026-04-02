@@ -1,18 +1,18 @@
 import os
-import base64
+from pathlib import Path
 from cryptography.fernet import Fernet
-from app.config import settings
+from app.config import settings, _ROOT
 
 
 def _get_fernet() -> Fernet:
     key = settings.encryption_key
     if not key:
-        # Generate a new key and persist it to .env
+        # Generate a new key and persist it to .env (use absolute path)
         new_key = Fernet.generate_key().decode()
         settings.encryption_key = new_key
-        env_path = ".env"
+        env_path = str(_ROOT / ".env")
         if os.path.exists(env_path):
-            with open(env_path, "r") as f:
+            with open(env_path, "r", encoding="utf-8") as f:
                 content = f.read()
             if "ENCRYPTION_KEY=" in content:
                 lines = content.splitlines()
@@ -22,11 +22,14 @@ def _get_fernet() -> Fernet:
                         new_lines.append(f"ENCRYPTION_KEY={new_key}")
                     else:
                         new_lines.append(line)
-                with open(env_path, "w") as f:
+                with open(env_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(new_lines))
             else:
-                with open(env_path, "a") as f:
+                with open(env_path, "a", encoding="utf-8") as f:
                     f.write(f"\nENCRYPTION_KEY={new_key}\n")
+        else:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(f"ENCRYPTION_KEY={new_key}\n")
         key = new_key
     # Ensure key is valid Fernet key (32 url-safe base64 bytes)
     try:

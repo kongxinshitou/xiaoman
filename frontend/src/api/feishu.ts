@@ -1,16 +1,29 @@
 import client from './client'
-import type { FeishuConfig, FeishuConfigUpdate, FeishuPushRequest } from '../types/feishu'
+import type { FeishuConfig, FeishuConfigUpdate, FeishuPushRequest, FeishuCreateGroupRequest } from '../types/feishu'
 
 export const feishuApi = {
-  getConfig: (): Promise<FeishuConfig> =>
-    client.get('/feishu/config').then((r) => r.data),
+  getConfig: async (): Promise<FeishuConfig> => {
+    const res = await client.get<FeishuConfig>('/feishu/config')
+    return res.data
+  },
 
-  updateConfig: (data: FeishuConfigUpdate): Promise<FeishuConfig> =>
-    client.patch('/feishu/config', data).then((r) => r.data),
+  updateConfig: async (data: FeishuConfigUpdate): Promise<{ message: string }> => {
+    const res = await client.patch('/feishu/config', data)
+    return res.data
+  },
 
-  testConnection: (): Promise<{ status: string; message: string }> =>
-    client.post('/feishu/test').then((r) => r.data),
+  testConnection: async (): Promise<{ message: string }> => {
+    const res = await client.post('/feishu/test')
+    return res.data
+  },
 
-  pushMessage: (data: FeishuPushRequest): Promise<{ message: string }> =>
-    client.post('/feishu/push', data).then((r) => r.data),
+  push: async (data: FeishuPushRequest): Promise<{ message: string }> => {
+    const res = await client.post('/feishu/push', data)
+    return res.data
+  },
+
+  createGroup: async (data: FeishuCreateGroupRequest): Promise<{ chat_id: string; name: string }> => {
+    const res = await client.post('/feishu/create-group', data)
+    return res.data
+  },
 }

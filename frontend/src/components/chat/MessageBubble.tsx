@@ -1,10 +1,12 @@
-import { Avatar, Space } from 'antd'
+import { Avatar } from 'antd'
 import { UserOutlined, RobotOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ChatMessage } from '../../types/chat'
-import ToolCallCard from './ToolCallCard'
 import SourceCitation from './SourceCitation'
+import WebResultCard from './WebResultCard'
+import ThinkingPanel from './ThinkingPanel'
+import { parseServerTime } from '../../utils/time'
 
 interface Props {
   message: ChatMessage
@@ -13,6 +15,7 @@ interface Props {
 export default function MessageBubble({ message }: Props) {
   const isUser = message.role === 'user'
   const isStreaming = message.isStreaming
+  const hasWebResults = !isUser && ((message.webResults && message.webResults.length > 0) || message.isWebSearching)
 
   return (
     <div
@@ -37,12 +40,24 @@ export default function MessageBubble({ message }: Props) {
         />
       )}
 
-      <div style={{ maxWidth: '72%', minWidth: 60 }}>
-        {/* Tool call indicator */}
-        {message.toolCall && (
+      <div style={{ maxWidth: '82%', minWidth: 60 }}>
+        {/* Web search results */}
+        {hasWebResults && (
           <div style={{ marginBottom: 8 }}>
-            <ToolCallCard toolCall={message.toolCall} />
+            <WebResultCard
+              results={message.webResults || []}
+              isSearching={message.isWebSearching}
+            />
           </div>
+        )}
+
+        {/* Thinking + tool calls panel */}
+        {!isUser && (message.thinking || (message.toolCalls && message.toolCalls.length > 0)) && (
+          <ThinkingPanel
+            thinking={message.thinking}
+            toolCalls={message.toolCalls}
+            isStreaming={isStreaming}
+          />
         )}
 
         {/* Citations */}
@@ -88,10 +103,7 @@ export default function MessageBubble({ message }: Props) {
             textAlign: isUser ? 'right' : 'left',
           }}
         >
-          {new Date(message.created_at).toLocaleTimeString('zh-CN', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {parseServerTime(message.created_at)?.format('HH:mm') ?? ''}
         </div>
       </div>
 

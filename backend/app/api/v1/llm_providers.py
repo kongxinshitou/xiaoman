@@ -1,6 +1,7 @@
 from typing import List
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,11 +10,63 @@ from app.database import get_db
 from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.models.llm_provider import LLMProvider
-from app.schemas.llm_provider import LLMProviderCreate, LLMProviderUpdate, LLMProviderRead
+from app.schemas.llm_provider import (
+    LLMProviderCreate, LLMProviderUpdate, LLMProviderRead,
+    FetchModelsRequest, FetchModelsResponse,
+)
 from app.services.encryption import encrypt
-from app.services.llm_service import test_provider
+from app.services.llm_service import test_provider, PROVIDER_CONFIG, PROVIDER_FALLBACK_MODELS
 
 router = APIRouter()
+
+
+@router.post("/fetch-models", response_model=FetchModelsResponse)
+async def fetch_provider_models(
+    payload: FetchModelsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch available models from a provider using the given API key."""
+    provider_cfg = PROVIDER_CONFIG.get(payload.provider_type, {"api_base": None})
+    base_url = payload.base_url or provider_cfg.get("api_base")
+    fallback = PROVIDER_FALLBACK_MODELS.get(payload.provider_type, [])
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            if payload.provider_type == "anthropic":
+                resp = await client.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={
+                        "x-api-key": payload.api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                models = [m["id"] for m in data.get("data", [])]
+            elif base_url:
+                url = base_url.rstrip("/") + "/models"
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {payload.api_key}"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                models = [m["id"] for m in data.get("data", [])]
+            else:
+                models = fallback
+    except Exception:
+        models = fallback
+
+    # If API returned models, merge with fallback (API result first, dedup)
+    if models and fallback:
+        seen = set(models)
+        for m in fallback:
+            if m not in seen:
+                models.append(m)
+    elif not models:
+        models = fallback
+
+    return {"models": models}
 
 
 @router.post("", response_model=LLMProviderRead)
@@ -39,6 +92,7 @@ async def create_provider(
         model_name=payload.model_name,
         is_active=payload.is_active,
         is_default=payload.is_default,
+        supports_vision=payload.supports_vision,
         created_by=current_user.id,
     )
     db.add(provider)
@@ -102,6 +156,8 @@ async def update_provider(
                 if p.id != provider_id:
                     p.is_default = False
         provider.is_default = payload.is_default
+    if payload.supports_vision is not None:
+        provider.supports_vision = payload.supports_vision
     provider.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(provider)

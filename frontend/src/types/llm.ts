@@ -6,6 +6,7 @@ export interface LLMProvider {
   model_name: string
   is_active: boolean
   is_default: boolean
+  supports_vision: boolean
   last_test_status: 'untested' | 'ok' | 'failed'
   last_tested_at: string | null
   created_at: string
@@ -19,6 +20,7 @@ export interface LLMProviderCreate {
   model_name: string
   is_active?: boolean
   is_default?: boolean
+  supports_vision?: boolean
 }
 
 export interface LLMProviderUpdate {
@@ -29,6 +31,7 @@ export interface LLMProviderUpdate {
   model_name?: string
   is_active?: boolean
   is_default?: boolean
+  supports_vision?: boolean
 }
 
 export const PROVIDER_TYPES = [

@@ -30,4 +30,13 @@ export const mcpToolsApi = {
     const res = await client.post<{ status: string }>(`/mcp-tools/${id}/ping`)
     return res.data
   },
+
+  discover: async (serverUrl: string, transport: string = 'sse') => {
+    const res = await client.post<{
+      discovered: number
+      saved: number
+      tools: { name: string; description: string }[]
+    }>('/mcp-tools/discover', { server_url: serverUrl, transport })
+    return res.data
+  },
 }

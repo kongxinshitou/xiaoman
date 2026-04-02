@@ -41,3 +41,4 @@ class ChatRequest(BaseModel):
     provider_id: Optional[str] = None
     kb_ids: Optional[List[str]] = None
     stream: bool = True
+    web_search: bool = False

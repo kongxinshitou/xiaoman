@@ -1,25 +1,28 @@
 export interface FeishuConfig {
-  id: string
-  app_id: string
-  verify_token: string
-  encrypt_key: string
-  default_push_chat_id: string
-  enabled: boolean
+  app_id: string | null
   has_app_secret: boolean
-  updated_at: string
+  bot_open_id: string | null
+  default_push_chat_id: string | null
+  ws_connected: boolean
+  enabled: boolean
 }
 
 export interface FeishuConfigUpdate {
   app_id?: string
   app_secret?: string
-  verify_token?: string
-  encrypt_key?: string
+  bot_open_id?: string
   default_push_chat_id?: string
   enabled?: boolean
 }
 
 export interface FeishuPushRequest {
-  title: string
-  content: string
-  chat_id?: string
+  chat_id: string
+  message: string
+  receive_id_type?: string
+}
+
+export interface FeishuCreateGroupRequest {
+  name: string
+  user_open_ids: string[]
+  description?: string
 }

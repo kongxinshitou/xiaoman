@@ -53,6 +53,9 @@ export default function ProviderCard({ provider, onEdit, onDelete, onTest, onSet
             {!provider.is_active && (
               <Tag color="default" style={{ fontSize: 11 }}>已禁用</Tag>
             )}
+            {provider.supports_vision && (
+              <Tag color="orange" style={{ fontSize: 11 }}>视觉/OCR</Tag>
+            )}
           </div>
           <Space size={8} wrap>
             <Tag color="blue">{typeLabel}</Tag>

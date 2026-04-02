@@ -1,7 +1,9 @@
-import { Modal, Form, Input, Select, Switch, Row, Col } from 'antd'
-import { useEffect } from 'react'
+import { Modal, Form, Input, Select, Switch, Row, Col, Button, message } from 'antd'
+import { SyncOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
 import type { LLMProvider, LLMProviderCreate } from '../../types/llm'
 import { PROVIDER_TYPES } from '../../types/llm'
+import { llmProvidersApi } from '../../api/llmProviders'
 
 interface Props {
   open: boolean
@@ -24,6 +26,8 @@ const BASE_URL_MAP: Record<string, string> = {
 export default function ProviderForm({ open, onClose, onSubmit, initialValues, loading }: Props) {
   const [form] = Form.useForm()
   const isEdit = !!initialValues
+  const [modelOptions, setModelOptions] = useState<{ value: string; label: string }[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -32,9 +36,13 @@ export default function ProviderForm({ open, onClose, onSubmit, initialValues, l
           ...initialValues,
           api_key: '',
         })
+        if (initialValues.model_name) {
+          setModelOptions([{ value: initialValues.model_name, label: initialValues.model_name }])
+        }
       } else {
         form.resetFields()
-        form.setFieldsValue({ is_active: true, is_default: false })
+        form.setFieldsValue({ is_active: true, is_default: false, supports_vision: false })
+        setModelOptions([])
       }
     }
   }, [open, initialValues])
@@ -43,6 +51,42 @@ export default function ProviderForm({ open, onClose, onSubmit, initialValues, l
     const baseUrl = BASE_URL_MAP[value]
     if (baseUrl) {
       form.setFieldValue('base_url', baseUrl)
+    }
+    setModelOptions([])
+    form.setFieldValue('model_name', undefined)
+  }
+
+  const handleFetchModels = async () => {
+    const providerType = form.getFieldValue('provider_type')
+    const apiKey = form.getFieldValue('api_key')
+    const baseUrl = form.getFieldValue('base_url')
+
+    if (!providerType) {
+      message.warning('请先选择提供商类型')
+      return
+    }
+    if (!apiKey && !isEdit) {
+      message.warning('请先输入 API Key')
+      return
+    }
+
+    setFetchingModels(true)
+    try {
+      const models = await llmProvidersApi.fetchModels({
+        provider_type: providerType,
+        api_key: apiKey || '__use_stored__',
+        base_url: baseUrl || undefined,
+      })
+      const options = models.map((m) => ({ value: m, label: m }))
+      setModelOptions(options)
+      if (options.length > 0 && !form.getFieldValue('model_name')) {
+        form.setFieldValue('model_name', options[0].value)
+      }
+      message.success(`已获取 ${models.length} 个可用模型`)
+    } catch {
+      message.error('获取模型列表失败，已显示推荐模型')
+    } finally {
+      setFetchingModels(false)
     }
   }
 
@@ -53,6 +97,7 @@ export default function ProviderForm({ open, onClose, onSubmit, initialValues, l
     }
     await onSubmit(values)
     form.resetFields()
+    setModelOptions([])
   }
 
   return (
@@ -84,10 +129,6 @@ export default function ProviderForm({ open, onClose, onSubmit, initialValues, l
           </Col>
         </Row>
 
-        <Form.Item name="model_name" label="模型名称" rules={[{ required: true }]}>
-          <Input placeholder="例如：gpt-4o, claude-3-5-sonnet, qwen-max..." />
-        </Form.Item>
-
         <Form.Item
           name="api_key"
           label={isEdit ? 'API Key (留空保持不变)' : 'API Key'}
@@ -100,14 +141,58 @@ export default function ProviderForm({ open, onClose, onSubmit, initialValues, l
           <Input placeholder="https://..." />
         </Form.Item>
 
+        <Form.Item
+          name="model_name"
+          label={
+            <span>
+              模型名称
+              <Button
+                type="link"
+                size="small"
+                icon={<SyncOutlined spin={fetchingModels} />}
+                onClick={handleFetchModels}
+                loading={fetchingModels}
+                style={{ marginLeft: 8, padding: '0 4px', height: 'auto', fontSize: 12 }}
+              >
+                获取可用模型
+              </Button>
+            </span>
+          }
+          rules={[{ required: true, message: '请选择或输入模型名称' }]}
+        >
+          <Select
+            showSearch
+            allowClear
+            placeholder="选择或输入模型名称，如 gpt-4o"
+            options={modelOptions}
+            filterOption={(input, option) =>
+              (option?.value as string)?.toLowerCase().includes(input.toLowerCase())
+            }
+            notFoundContent={modelOptions.length === 0 ? '点击"获取可用模型"或直接输入' : '无匹配'}
+            mode={undefined}
+            onSearch={(val) => {
+              // Allow typing a custom value not in list
+              const exists = modelOptions.some((o) => o.value === val)
+              if (val && !exists) {
+                form.setFieldValue('model_name', val)
+              }
+            }}
+          />
+        </Form.Item>
+
         <Row gutter={16}>
-          <Col span={12}>
+          <Col span={8}>
             <Form.Item name="is_active" label="启用" valuePropName="checked">
               <Switch />
             </Form.Item>
           </Col>
-          <Col span={12}>
+          <Col span={8}>
             <Form.Item name="is_default" label="设为默认" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item name="supports_vision" label="支持视觉/OCR" valuePropName="checked">
               <Switch />
             </Form.Item>
           </Col>

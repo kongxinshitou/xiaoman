@@ -16,6 +16,7 @@ class LLMProvider(Base):
     model_name: Mapped[str] = mapped_column(String(200), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    supports_vision: Mapped[bool] = mapped_column(Boolean, default=False)
     last_test_status: Mapped[str] = mapped_column(String(20), default="untested")
     last_tested_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)

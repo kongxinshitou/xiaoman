@@ -19,6 +19,22 @@ PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     "custom": {"api_base": None},
 }
 
+PROVIDER_FALLBACK_MODELS: Dict[str, List[str]] = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"],
+    "anthropic": [
+        "claude-opus-4-5-20251101", "claude-sonnet-4-5-20251101", "claude-haiku-4-5-20251001",
+        "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229",
+    ],
+    "qwen": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long", "qwen2.5-72b-instruct", "qwen2.5-14b-instruct"],
+    "doubao": ["doubao-1-5-pro-32k-250115", "doubao-1-5-lite-32k-250115", "doubao-pro-32k", "doubao-lite-32k"],
+    "zhipu": ["glm-4-plus", "glm-4", "glm-4-long", "glm-4-flash", "glm-4-air"],
+    "moonshot": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+    "minimax": ["abab6.5-chat", "abab6.5s-chat", "abab5.5-chat", "abab5.5s-chat"],
+    "baichuan": ["Baichuan4", "Baichuan3-Turbo", "Baichuan3-Turbo-128k", "Baichuan2-Turbo"],
+    "custom": [],
+}
+
 MOCK_RESPONSES = [
     "你好！我是晓曼，您的智能运维助手。",
     "我已收到您的消息，正在处理中...",
@@ -48,7 +64,8 @@ async def stream_chat(
     messages: List[Dict[str, str]],
     provider: Optional[LLMProvider],
     db: AsyncSession,
-) -> AsyncGenerator[str, None]:
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> AsyncGenerator:
     global _mock_idx
 
     if provider is None:
@@ -86,14 +103,73 @@ async def stream_chat(
         }
         if base_url:
             kwargs["api_base"] = base_url
+        if tools:
+            kwargs["tools"] = tools
 
         response = await litellm.acompletion(**kwargs)
+
+        # Accumulate tool call fragments across chunks
+        tool_call_acc: Dict[int, Dict[str, Any]] = {}
+
         async for chunk in response:
-            delta = chunk.choices[0].delta.content if chunk.choices else None
-            if delta:
-                yield delta
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+
+            # Handle text content
+            if delta.content:
+                yield delta.content
+
+            # Handle thinking/reasoning content (DeepSeek-R1 and compatible models)
+            if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                yield {"type": "thinking", "delta": delta.reasoning_content}
+
+            # Handle tool calls (streaming fragments)
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index if hasattr(tc, "index") else 0
+                    if idx not in tool_call_acc:
+                        tool_call_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                    if hasattr(tc, "id") and tc.id:
+                        tool_call_acc[idx]["id"] = tc.id
+                    if hasattr(tc, "function") and tc.function:
+                        if tc.function.name:
+                            tool_call_acc[idx]["name"] += tc.function.name
+                        if tc.function.arguments:
+                            tool_call_acc[idx]["arguments"] += tc.function.arguments
+
+            # Check finish reason for tool_calls
+            finish_reason = chunk.choices[0].finish_reason
+            if finish_reason == "tool_calls" and tool_call_acc:
+                for idx in sorted(tool_call_acc.keys()):
+                    tc_data = tool_call_acc[idx]
+                    try:
+                        args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                    yield {
+                        "type": "tool_call",
+                        "id": tc_data["id"],
+                        "name": tc_data["name"],
+                        "arguments": args,
+                    }
+                tool_call_acc.clear()
+
     except Exception as e:
         error_msg = f"[LLM错误] {str(e)}"
+        for char in error_msg:
+            yield char
+            await asyncio.sleep(0.01)
+    except BaseException as e:
+        if isinstance(e, (GeneratorExit, KeyboardInterrupt, SystemExit)):
+            raise
+        # Python 3.12+: asyncio.TaskGroup wraps CancelledError into BaseExceptionGroup
+        if hasattr(e, 'exceptions'):
+            causes = [ex for ex in e.exceptions if not isinstance(ex, asyncio.CancelledError)]
+            msg = str(causes[0]) if causes else str(e)
+        else:
+            msg = str(e)
+        error_msg = f"[LLM错误] {msg}"
         for char in error_msg:
             yield char
             await asyncio.sleep(0.01)
@@ -101,27 +177,27 @@ async def stream_chat(
 
 async def test_provider(provider: LLMProvider) -> bool:
     try:
-        import litellm
-
         api_key = decrypt(provider.encrypted_api_key)
         provider_cfg = PROVIDER_CONFIG.get(provider.provider_type, {"api_base": None})
         base_url = provider.base_url or provider_cfg.get("api_base")
 
-        model = provider.model_name
-        if provider.provider_type not in ("openai", "anthropic"):
-            model = f"openai/{provider.model_name}"
-
-        kwargs: Dict[str, Any] = {
-            "model": model,
-            "messages": [{"role": "user", "content": "hi"}],
-            "stream": False,
-            "api_key": api_key,
-            "max_tokens": 5,
-        }
-        if base_url:
-            kwargs["api_base"] = base_url
-
-        await litellm.acompletion(**kwargs)
+        if provider.provider_type == "anthropic":
+            import litellm
+            await litellm.acompletion(
+                model=f"anthropic/{provider.model_name}",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=False,
+                api_key=api_key,
+                max_tokens=5,
+            )
+        else:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            await client.chat.completions.create(
+                model=provider.model_name,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+            )
         return True
     except Exception:
         return False

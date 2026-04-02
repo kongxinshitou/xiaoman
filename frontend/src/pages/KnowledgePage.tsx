@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react'
-import { message, Typography, Spin } from 'antd'
-import { BookOutlined } from '@ant-design/icons'
-import type { KnowledgeBase, Document, KnowledgeBaseCreate } from '../types/knowledge'
+import { message, Typography, Spin, Input, List, Tag, Divider, Empty, Tabs, Badge } from 'antd'
+import { BookOutlined, SearchOutlined } from '@ant-design/icons'
+import type { KnowledgeBase, Document, KnowledgeBaseCreate, SearchResult } from '../types/knowledge'
+import type { EmbedProvider } from '../types/embed'
+import type { OCRProvider } from '../types/ocr'
 import { knowledgeApi } from '../api/knowledge'
+import { embedProvidersApi } from '../api/embedProviders'
+import { ocrProvidersApi } from '../api/ocrProviders'
 import KnowledgeBaseList from '../components/knowledge/KnowledgeBaseList'
 import KnowledgeBaseForm from '../components/knowledge/KnowledgeBaseForm'
 import DocumentUploader from '../components/knowledge/DocumentUploader'
 import DocumentTable from '../components/knowledge/DocumentTable'
 
 const { Title, Text } = Typography
+const { Search } = Input
 
 export default function KnowledgePage() {
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
@@ -19,14 +24,23 @@ export default function KnowledgePage() {
   const [formOpen, setFormOpen] = useState(false)
   const [editingKb, setEditingKb] = useState<KnowledgeBase | null>(null)
   const [formLoading, setFormLoading] = useState(false)
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [embedProviders, setEmbedProviders] = useState<EmbedProvider[]>([])
+  const [ocrProviders, setOcrProviders] = useState<OCRProvider[]>([])
+  const [activeTab, setActiveTab] = useState<'docs' | 'search'>('docs')
 
   useEffect(() => {
     loadKbs()
+    embedProvidersApi.list().then(setEmbedProviders).catch(() => {})
+    ocrProvidersApi.list().then(setOcrProviders).catch(() => {})
   }, [])
 
   useEffect(() => {
     if (selectedKb) {
       loadDocuments(selectedKb.id)
+      setSearchResults(null)
+      setActiveTab('docs')
     }
   }, [selectedKb?.id])
 
@@ -95,6 +109,7 @@ export default function KnowledgePage() {
         const remaining = kbs.filter((k) => k.id !== kb.id)
         setSelectedKb(remaining.length > 0 ? remaining[0] : null)
         setDocuments([])
+        setSearchResults(null)
       }
       message.success('知识库已删除')
     } catch {
@@ -112,6 +127,32 @@ export default function KnowledgePage() {
       message.error('删除失败')
     }
   }
+
+  const handleSearch = async (query: string) => {
+    if (!selectedKb || !query.trim()) return
+    try {
+      setSearching(true)
+      const results = await knowledgeApi.search(selectedKb.id, query)
+      setSearchResults(results)
+    } catch {
+      message.error('检索失败')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  const searchTabLabel = (
+    <span>
+      知识检索
+      {searchResults !== null && searchResults.length > 0 && (
+        <Badge
+          count={searchResults.length}
+          size="small"
+          style={{ marginLeft: 6, backgroundColor: '#4f46e5' }}
+        />
+      )}
+    </span>
+  )
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 56px)', overflow: 'hidden' }}>
@@ -181,7 +222,8 @@ export default function KnowledgePage() {
           </div>
         ) : (
           <>
-            <div style={{ marginBottom: 20 }}>
+            {/* KB header */}
+            <div style={{ marginBottom: 4 }}>
               <Title level={4} style={{ margin: 0 }}>
                 {selectedKb.name}
               </Title>
@@ -190,18 +232,117 @@ export default function KnowledgePage() {
                   {selectedKb.description}
                 </Text>
               )}
+              <div style={{ marginTop: 4 }}>
+                {selectedKb.embed_provider_id
+                  ? <Tag color="cyan" style={{ fontSize: 11 }}>Embed 提供商</Tag>
+                  : <Tag color="blue" style={{ fontSize: 11 }}>{selectedKb.embed_model}</Tag>
+                }
+                {selectedKb.has_embed_key && (
+                  <Tag color="green" style={{ fontSize: 11 }}>语义检索</Tag>
+                )}
+              </div>
             </div>
 
-            <DocumentUploader
-              kbId={selectedKb.id}
-              onUploadComplete={() => loadDocuments(selectedKb.id)}
-            />
-
-            <DocumentTable
-              documents={documents}
-              loading={loadingDocs}
-              onDelete={handleDeleteDoc}
-              onRefresh={() => loadDocuments(selectedKb.id)}
+            {/* Tabs */}
+            <Tabs
+              activeKey={activeTab}
+              onChange={(key) => setActiveTab(key as 'docs' | 'search')}
+              items={[
+                {
+                  key: 'docs',
+                  label: '文档管理',
+                  children: (
+                    <>
+                      <DocumentUploader
+                        kbId={selectedKb.id}
+                        onUploadComplete={() => loadDocuments(selectedKb.id)}
+                      />
+                      <DocumentTable
+                        documents={documents}
+                        loading={loadingDocs}
+                        onDelete={handleDeleteDoc}
+                        onRefresh={() => loadDocuments(selectedKb.id)}
+                      />
+                    </>
+                  ),
+                },
+                {
+                  key: 'search',
+                  label: searchTabLabel,
+                  children: (
+                    <div>
+                      <Search
+                        placeholder="检索知识库内容..."
+                        allowClear
+                        enterButton={
+                          <span>
+                            <SearchOutlined /> 检索
+                          </span>
+                        }
+                        loading={searching}
+                        style={{ width: '100%', maxWidth: 560, marginBottom: 16 }}
+                        onSearch={handleSearch}
+                        onChange={(e) => {
+                          if (!e.target.value) setSearchResults(null)
+                        }}
+                      />
+                      {searchResults === null ? (
+                        <Empty
+                          description="输入关键词检索知识库内容"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
+                      ) : searchResults.length === 0 ? (
+                        <Empty
+                          description="未找到相关内容"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
+                      ) : (
+                        <>
+                          <Divider orientation="left" style={{ fontSize: 13 }}>
+                            检索结果（{searchResults.length} 条）
+                          </Divider>
+                          <List
+                            dataSource={searchResults}
+                            renderItem={(item) => (
+                              <List.Item
+                                style={{ padding: '10px 0', alignItems: 'flex-start' }}
+                              >
+                                <div style={{ width: '100%' }}>
+                                  <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                                    <Tag color="purple" style={{ fontSize: 11 }}>
+                                      {item.document_name || item.doc_id}
+                                    </Tag>
+                                    <Tag color="cyan" style={{ fontSize: 11 }}>
+                                      相关度 {(item.score * 100).toFixed(1)}%
+                                    </Tag>
+                                  </div>
+                                  <div
+                                    style={{
+                                      background: '#f8fafc',
+                                      border: '1px solid #e2e8f0',
+                                      borderRadius: 8,
+                                      padding: '8px 12px',
+                                      fontSize: 13,
+                                      color: '#374151',
+                                      lineHeight: 1.6,
+                                      maxHeight: 120,
+                                      overflow: 'auto',
+                                      whiteSpace: 'pre-wrap',
+                                      wordBreak: 'break-word',
+                                    }}
+                                  >
+                                    {item.chunk_text}
+                                  </div>
+                                </div>
+                              </List.Item>
+                            )}
+                          />
+                        </>
+                      )}
+                    </div>
+                  ),
+                },
+              ]}
             />
           </>
         )}
@@ -217,6 +358,8 @@ export default function KnowledgePage() {
         onSubmit={editingKb ? handleUpdate : handleCreate}
         initialValues={editingKb}
         loading={formLoading}
+        embedProviders={embedProviders}
+        ocrProviders={ocrProviders}
       />
     </div>
   )

@@ -9,9 +9,11 @@ services:
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./xiaoman.db
       - UPLOAD_DIR=./uploads
+      - ALLOWED_ORIGINS=*
     volumes:
       - ./backend:/app
       - xiaoman_uploads:/app/uploads
+      - xiaoman_secrets:/secrets
     restart: unless-stopped
     networks:
       - xiaoman-net
@@ -32,6 +34,7 @@ services:
 
 volumes:
   xiaoman_uploads:
+  xiaoman_secrets:
 
 networks:
   xiaoman-net:

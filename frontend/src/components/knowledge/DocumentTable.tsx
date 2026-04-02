@@ -1,8 +1,9 @@
+import { useEffect, useRef } from 'react'
 import { Table, Tag, Button, Popconfirm, Tooltip, Typography } from 'antd'
-import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import type { Document } from '../../types/knowledge'
-import dayjs from 'dayjs'
+import { parseServerTime } from '../../utils/time'
 
 const { Text } = Typography
 
@@ -27,6 +28,36 @@ const STATUS_MAP = {
 } as const
 
 export default function DocumentTable({ documents, loading, onDelete, onRefresh }: Props) {
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const onRefreshRef = useRef(onRefresh)
+  useEffect(() => { onRefreshRef.current = onRefresh }, [onRefresh])
+
+  useEffect(() => {
+    const hasInProgress = documents.some(
+      (d) => d.status === 'pending' || d.status === 'processing'
+    )
+    if (hasInProgress) {
+      if (!pollRef.current) {
+        pollRef.current = setInterval(() => onRefreshRef.current(), 3000)
+      }
+    } else {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [documents])
+
+  const hasInProgress = documents.some(
+    (d) => d.status === 'pending' || d.status === 'processing'
+  )
+
   const columns: ColumnsType<Document> = [
     {
       title: '文件名',
@@ -71,7 +102,7 @@ export default function DocumentTable({ documents, loading, onDelete, onRefresh 
       dataIndex: 'created_at',
       key: 'created_at',
       width: 130,
-      render: (t) => dayjs(t).format('MM-DD HH:mm'),
+      render: (t) => parseServerTime(t)?.format('MM-DD HH:mm') ?? '',
     },
     {
       title: '操作',
@@ -102,7 +133,14 @@ export default function DocumentTable({ documents, loading, onDelete, onRefresh 
       pagination={{ pageSize: 10, showTotal: (total) => `共 ${total} 个文档` }}
       title={() => (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text strong>文档列表</Text>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Text strong>文档列表</Text>
+            {hasInProgress && (
+              <Tag icon={<SyncOutlined spin />} color="processing" style={{ fontSize: 11 }}>
+                处理中，自动刷新
+              </Tag>
+            )}
+          </div>
           <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh}>
             刷新
           </Button>

@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 from sqlalchemy import String, Text, Integer, BigInteger, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime, timezone
@@ -14,6 +15,13 @@ class KnowledgeBase(Base):
     owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     milvus_collection: Mapped[str] = mapped_column(String(255), nullable=True)
     embed_model: Mapped[str] = mapped_column(String(100), default="text2vec-base-chinese")
+    embed_api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=True)
+    embed_base_url: Mapped[str] = mapped_column(String(500), nullable=True)
+    embed_provider_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("embed_providers.id"), nullable=True)
+    ocr_provider_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("ocr_providers.id"), nullable=True)
+    chunk_size: Mapped[int] = mapped_column(Integer, default=500)
+    chunk_overlap: Mapped[int] = mapped_column(Integer, default=50)
+    top_k: Mapped[int] = mapped_column(Integer, default=5)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -43,3 +51,4 @@ class DocumentChunk(Base):
     kb_id: Mapped[str] = mapped_column(String(36), nullable=False)
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_idx: Mapped[int] = mapped_column(Integer, default=0)
+    embedding: Mapped[str] = mapped_column(Text, nullable=True)  # JSON float list

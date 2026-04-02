@@ -1,5 +1,5 @@
 import client from './client'
-import type { KnowledgeBase, Document, KnowledgeBaseCreate } from '../types/knowledge'
+import type { KnowledgeBase, Document, KnowledgeBaseCreate, SearchResult } from '../types/knowledge'
 
 export const knowledgeApi = {
   createKB: async (data: KnowledgeBaseCreate) => {
@@ -47,5 +47,12 @@ export const knowledgeApi = {
 
   deleteDocument: async (kbId: string, docId: string) => {
     await client.delete(`/knowledge/${kbId}/documents/${docId}`)
+  },
+
+  search: async (kbId: string, query: string, topK = 5) => {
+    const res = await client.get<SearchResult[]>(`/knowledge/${kbId}/search`, {
+      params: { q: query, top_k: topK },
+    })
+    return res.data
   },
 }

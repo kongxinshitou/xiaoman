@@ -1,16 +1,44 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import create_tables, AsyncSessionLocal
+from app.database import create_tables, AsyncSessionLocal, engine
 from app.api.router import api_router
 from app.config import settings
 from app.core.exceptions import register_exception_handlers
+# Ensure all models are imported so SQLAlchemy creates their tables
+import app.models.embed_provider  # noqa: F401
+import app.models.ocr_provider  # noqa: F401
+import app.models.system_setting  # noqa: F401
+import app.models.feishu_config  # noqa: F401
+
+
+async def migrate_db():
+    """Add new columns to existing tables if they don't exist (SQLite safe)."""
+    new_columns = [
+        ("knowledge_bases", "embed_api_key_encrypted", "TEXT"),
+        ("knowledge_bases", "embed_base_url", "VARCHAR(500)"),
+        ("document_chunks", "embedding", "TEXT"),
+        ("llm_providers", "supports_vision", "BOOLEAN DEFAULT 0"),
+        ("knowledge_bases", "embed_provider_id", "VARCHAR(36)"),
+        ("knowledge_bases", "ocr_provider_id", "VARCHAR(36)"),
+        ("knowledge_bases", "chunk_size", "INTEGER DEFAULT 500"),
+        ("knowledge_bases", "chunk_overlap", "INTEGER DEFAULT 50"),
+        ("knowledge_bases", "top_k", "INTEGER DEFAULT 5"),
+        ("feishu_config", "connection_mode", "VARCHAR(20) DEFAULT 'webhook'"),
+    ]
+    async with engine.begin() as conn:
+        for table, column, col_type in new_columns:
+            try:
+                await conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                )
+            except Exception:
+                pass  # Column already exists
 
 
 async def seed_default_data():
     from sqlalchemy import select
     from app.models.user import User
-    from app.models.skill import Skill
     from app.services.auth_service import hash_password
 
     async with AsyncSessionLocal() as db:
@@ -28,53 +56,18 @@ async def seed_default_data():
             db.add(admin)
             await db.commit()
 
-        # Create default skills
-        default_skills = [
-            {
-                "name": "rag_search",
-                "display_name": "RAG检索",
-                "description": "从知识库中检索相关文档，增强AI回答质量",
-                "skill_type": "rag",
-                "config": '{"top_k": 5}',
-                "trigger_keywords": '["怎么", "如何", "什么是", "查询", "查找"]',
-                "priority": 10,
-            },
-            {
-                "name": "mcp_execute",
-                "display_name": "MCP执行",
-                "description": "调用MCP工具执行运维操作、脚本和自动化任务",
-                "skill_type": "mcp",
-                "config": "{}",
-                "trigger_keywords": '["执行", "运行", "启动", "run", "execute"]',
-                "priority": 20,
-            },
-            {
-                "name": "direct_chat",
-                "display_name": "直接对话",
-                "description": "直接与LLM对话，不使用知识库或工具",
-                "skill_type": "llm",
-                "config": "{}",
-                "trigger_keywords": "[]",
-                "priority": 100,
-            },
-        ]
-
-        for skill_data in default_skills:
-            result = await db.execute(
-                select(Skill).where(Skill.name == skill_data["name"])
-            )
-            if not result.scalar_one_or_none():
-                skill = Skill(**skill_data)
-                db.add(skill)
-
-        await db.commit()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
+    await migrate_db()
     await seed_default_data()
+    # Start Feishu WebSocket client if configured
+    from app.services import feishu_service
+    await feishu_service.maybe_start_ws(AsyncSessionLocal)
     yield
+    # Shutdown: stop WS client gracefully
+    feishu_service.stop_ws_client()
 
 
 app = FastAPI(
@@ -84,11 +77,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — wildcard "*" disables credentials (frontend uses Bearer token, not cookies)
+_origins = settings.allowed_origins
+_wildcard = _origins == ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials=not _wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )

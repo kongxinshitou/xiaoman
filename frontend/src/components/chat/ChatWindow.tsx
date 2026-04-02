@@ -32,7 +32,7 @@ export default function ChatWindow({ sessionId }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [sessionMessages.length, sessionMessages[sessionMessages.length - 1]?.content])
 
-  const handleSend = async (message: string) => {
+  const handleSend = async (message: string, webSearch = false) => {
     // Optimistically add user message
     const userMsg = {
       id: Date.now().toString(),
@@ -47,13 +47,14 @@ export default function ChatWindow({ sessionId }: Props) {
     await sendMessage(sessionId, message, {
       providerId: selectedProviderId || undefined,
       kbIds: selectedKbIds.length > 0 ? selectedKbIds : undefined,
+      webSearch,
     })
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#f8fafc' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', flex: 1, minWidth: 0, background: '#f8fafc' }}>
       {/* Messages area */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
         {sessionMessages.length === 0 && !isLoading ? (
           <div
             style={{

@@ -30,4 +30,9 @@ export const llmProvidersApi = {
     const res = await client.post<{ status: string; message: string }>(`/llm-providers/${id}/test`)
     return res.data
   },
+
+  fetchModels: async (data: { provider_type: string; api_key: string; base_url?: string }) => {
+    const res = await client.post<{ models: string[] }>('/llm-providers/fetch-models', data)
+    return res.data.models
+  },
 }
