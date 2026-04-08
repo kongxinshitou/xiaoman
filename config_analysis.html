@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>晓曼 Xiaoman — 配置架构分析报告</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #222536;
+      --border: #2e3150;
+      --accent: #6366f1;
+      --accent2: #22d3ee;
+      --accent3: #f59e0b;
+      --accent4: #10b981;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --text-muted: #8892a4;
+      --text-dim: #4b5563;
+      --code-bg: #111827;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    /* ── HEADER ── */
+    header {
+      background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 60%, #0c1a2e 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 40px 48px 32px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    header h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(90deg, #818cf8, #22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    header p.subtitle {
+      color: var(--text-muted);
+      margin-top: 6px;
+      font-size: 13px;
+    }
+    .meta-tags { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    .tag {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .tag.green { border-color: var(--accent4); color: var(--accent4); }
+    .tag.blue  { border-color: var(--accent);  color: var(--accent);  }
+    .tag.cyan  { border-color: var(--accent2); color: var(--accent2); }
+    .tag.amber { border-color: var(--accent3); color: var(--accent3); }
+    .tag.red   { border-color: var(--danger);  color: var(--danger);  }
+
+    /* ── LAYOUT ── */
+    .layout { display: flex; min-height: 100vh; }
+
+    nav {
+      width: 260px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      position: sticky;
+      top: 120px;
+      height: calc(100vh - 120px);
+      overflow-y: auto;
+    }
+    nav .nav-section { padding: 6px 20px 4px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
+    nav a {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 20px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      border-left: 3px solid transparent;
+      transition: all 0.15s;
+    }
+    nav a:hover { color: var(--text); background: var(--surface2); border-left-color: var(--accent); }
+    nav a .icon { font-size: 14px; width: 18px; text-align: center; }
+
+    main {
+      flex: 1;
+      padding: 36px 48px;
+      max-width: 1100px;
+    }
+
+    /* ── SECTION ── */
+    .section { margin-bottom: 52px; }
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 28px;
+    }
+    .section-icon {
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .icon-env   { background: linear-gradient(135deg, #10b981, #059669); }
+    .icon-py    { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+    .icon-react { background: linear-gradient(135deg, #22d3ee, #0891b2); }
+    .icon-docker{ background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+    .icon-other { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .icon-arch  { background: linear-gradient(135deg, #ec4899, #9333ea); }
+
+    .section-header h2 { font-size: 20px; font-weight: 700; }
+
+    /* ── FILE CARD ── */
+    .file-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .file-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+    }
+    .file-path {
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 13px;
+      color: var(--accent2);
+      font-weight: 600;
+    }
+    .file-badge {
+      font-size: 11px;
+      padding: 2px 10px;
+      border-radius: 12px;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    .badge-env    { color: var(--accent4); border-color: var(--accent4); background: rgba(16,185,129,.08); }
+    .badge-py     { color: var(--accent);  border-color: var(--accent);  background: rgba(99,102,241,.08); }
+    .badge-ts     { color: var(--accent2); border-color: var(--accent2); background: rgba(34,211,238,.08); }
+    .badge-docker { color: #60a5fa;        border-color: #60a5fa;        background: rgba(59,130,246,.08); }
+    .badge-config { color: var(--accent3); border-color: var(--accent3); background: rgba(245,158,11,.08); }
+    .badge-shell  { color: #a78bfa;        border-color: #a78bfa;        background: rgba(139,92,246,.08); }
+
+    .file-card-body { padding: 20px; }
+
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    @media (max-width: 800px) { .analysis-grid { grid-template-columns: 1fr; } }
+
+    .analysis-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .analysis-box.full { grid-column: 1 / -1; }
+    .analysis-box h4 {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .dot-green  { background: var(--accent4); }
+    .dot-blue   { background: var(--accent);  }
+    .dot-cyan   { background: var(--accent2); }
+    .dot-amber  { background: var(--accent3); }
+    .dot-red    { background: var(--danger);  }
+
+    .kv-list { list-style: none; }
+    .kv-list li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .kv-list li:last-child { border-bottom: none; }
+    .kv-key {
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 12px;
+      color: var(--accent3);
+      min-width: 160px;
+      flex-shrink: 0;
+    }
+    .kv-val { color: var(--text-muted); }
+    .kv-val code {
+      background: rgba(255,255,255,.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 11px;
+      color: #a5f3fc;
+    }
+
+    ul.bullet { padding-left: 18px; }
+    ul.bullet li { color: var(--text-muted); padding: 3px 0; font-size: 13px; }
+    ul.bullet li strong { color: var(--text); }
+
+    .warn-box {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      background: rgba(239,68,68,.08);
+      border: 1px solid rgba(239,68,68,.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #fca5a5;
+    }
+    .warn-box .warn-icon { font-size: 16px; flex-shrink: 0; }
+
+    /* ── ARCH DIAGRAM ── */
+    .arch-diagram {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      margin: 28px 0;
+      overflow-x: auto;
+    }
+    .arch-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      margin: 10px 0;
+      flex-wrap: wrap;
+    }
+    .arch-box {
+      border-radius: 10px;
+      padding: 12px 18px;
+      text-align: center;
+      min-width: 130px;
+      border: 1px solid;
+      font-size: 12px;
+    }
+    .arch-box .arch-title { font-weight: 700; font-size: 13px; margin-bottom: 3px; }
+    .arch-box .arch-sub   { font-size: 11px; opacity: .7; }
+    .arch-box.env    { background: rgba(16,185,129,.10); border-color: var(--accent4); color: var(--accent4); }
+    .arch-box.front  { background: rgba(34,211,238,.10); border-color: var(--accent2); color: var(--accent2); }
+    .arch-box.back   { background: rgba(99,102,241,.10); border-color: var(--accent);  color: var(--accent);  }
+    .arch-box.db     { background: rgba(245,158,11,.10); border-color: var(--accent3); color: var(--accent3); }
+    .arch-box.ext    { background: rgba(239,68,68,.10);  border-color: var(--danger);  color: #fca5a5; }
+    .arch-box.docker { background: rgba(59,130,246,.10); border-color: #60a5fa;        color: #93c5fd; }
+
+    .arch-arrow {
+      padding: 0 12px;
+      color: var(--text-dim);
+      font-size: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      gap: 2px;
+    }
+    .arch-arrow .arr { font-size: 20px; color: var(--text-dim); }
+
+    .flow-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 20px;
+    }
+    .flow-table th {
+      text-align: left;
+      padding: 8px 14px;
+      border-bottom: 2px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+    }
+    .flow-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .flow-table tr:hover td { background: var(--surface2); }
+    .flow-table td code {
+      background: rgba(255,255,255,.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 11px;
+      color: #a5f3fc;
+    }
+    .flow-table td .pill {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      margin-right: 4px;
+    }
+    .pill-green { background: rgba(16,185,129,.15); color: var(--accent4); }
+    .pill-blue  { background: rgba(99,102,241,.15);  color: var(--accent);  }
+    .pill-cyan  { background: rgba(34,211,238,.15); color: var(--accent2); }
+    .pill-amber { background: rgba(245,158,11,.15); color: var(--accent3); }
+
+    /* ── SUMMARY CARDS ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 14px;
+      margin: 24px 0;
+    }
+    .summary-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .summary-card .sc-num {
+      font-size: 28px;
+      font-weight: 800;
+      background: linear-gradient(90deg, #818cf8, #22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .summary-card .sc-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 48px;
+      color: var(--text-dim);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    /* ── SCROLLBAR ── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>晓曼 Xiaoman — 配置架构分析报告</h1>
+  <p class="subtitle">全量配置文件扫描 · 运行时影响分析 · 部署架构总结</p>
+  <div class="meta-tags">
+    <span class="tag green">生成日期：2026-04-07</span>
+    <span class="tag blue">FastAPI + React + Vite</span>
+    <span class="tag cyan">Docker Compose</span>
+    <span class="tag amber">SQLite / ChromaDB</span>
+    <span class="tag">分支：master</span>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- ── NAV ── -->
+  <nav>
+    <div class="nav-section">环境变量</div>
+    <a href="#env"><span class="icon">🔑</span>.env</a>
+    <a href="#env-example"><span class="icon">📄</span>.env.example</a>
+
+    <div class="nav-section">Python 后端</div>
+    <a href="#requirements"><span class="icon">📦</span>requirements.txt</a>
+    <a href="#config-py"><span class="icon">⚙️</span>app/config.py</a>
+
+    <div class="nav-section">React 前端</div>
+    <a href="#package-json"><span class="icon">📦</span>package.json</a>
+    <a href="#vite-config"><span class="icon">⚡</span>vite.config.ts</a>
+    <a href="#tsconfig"><span class="icon">🔷</span>tsconfig.json</a>
+    <a href="#tailwind"><span class="icon">🎨</span>tailwind.config.ts</a>
+    <a href="#postcss"><span class="icon">🎨</span>postcss.config.js</a>
+
+    <div class="nav-section">容器化</div>
+    <a href="#dockerfile"><span class="icon">🐳</span>backend/Dockerfile</a>
+    <a href="#entrypoint"><span class="icon">🚀</span>entrypoint.sh</a>
+    <a href="#compose"><span class="icon">🐳</span>docker-compose.yml</a>
+
+    <div class="nav-section">版本控制</div>
+    <a href="#gitignore"><span class="icon">👁️</span>.gitignore</a>
+
+    <div class="nav-section">总结</div>
+    <a href="#arch"><span class="icon">🗺️</span>架构总览</a>
+  </nav>
+
+  <!-- ── MAIN ── -->
+  <main>
+
+    <!-- ═══════════ 概览 ═══════════ -->
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="sc-num">15</div>
+        <div class="sc-label">配置文件总数</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-num">2</div>
+        <div class="sc-label">运行时服务（前端 + 后端）</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-num">2</div>
+        <div class="sc-label">数据存储（SQLite + ChromaDB）</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-num">8000<br><span style="font-size:16px">/ 5173</span></div>
+        <div class="sc-label">后端 / 前端端口</div>
+      </div>
+    </div>
+
+    <!-- ═══════════ 1. 环境变量 ═══════════ -->
+    <div class="section" id="env">
+      <div class="section-header">
+        <div class="section-icon icon-env">🔑</div>
+        <h2>1. 环境变量配置</h2>
+      </div>
+
+      <!-- .env -->
+      <div class="file-card">
+        <div class="file-card-header">
+          <span class="file-path">.env</span>
+          <span class="file-badge badge-env">ENV · 当前激活</span>
+        </div>
+        <div class="file-card-body">
+          <p style="color:var(--text-muted);font-size:13px">位于项目根目录，由 <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;font-family:monospace;color:#a5f3fc">backend/app/config.py</code> 的 Pydantic Settings 自动读取，覆盖默认值。</p>
+
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>关键配置项</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">SECRET_KEY</span><span class="kv-val"><code>123456</code> ⚠️ 弱密钥</span></li>
+                <li><span class="kv-key">ENCRYPTION_KEY</span><span class="kv-val"><code>UlKNz_nNZE…</code> Fernet 密钥</span></li>
+                <li><span class="kv-key">MAX_FILE_SIZE_MB</span><span class="kv-val"><code>50</code></span></li>
+                <li><span class="kv-key">ALLOWED_ORIGINS</span><span class="kv-val"><code>localhost:5173, :3000</code></span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>对工作逻辑的影响</h4>
+              <ul class="bullet">
+                <li><strong>SECRET_KEY</strong>：用于 JWT 签名，决定 Token 安全性</li>
+                <li><strong>ENCRYPTION_KEY</strong>：用 Fernet 对称加密敏感数据（如 API Key）</li>
+                <li><strong>ALLOWED_ORIGINS</strong>：控制 CORS，仅允许列表内源访问 API</li>
+                <li><strong>MAX_FILE_SIZE_MB</strong>：限制上传文件大小，防止资源耗尽</li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-cyan"></span>对项目结构的影响</h4>
+              <ul class="bullet">
+                <li>通过 <code style="font-size:11px;color:#a5f3fc">pydantic-settings</code> 注入全局 <code style="font-size:11px;color:#a5f3fc">settings</code> 对象</li>
+                <li>所有模块通过 <code style="font-size:11px;color:#a5f3fc">from app.config import settings</code> 获取配置，统一管理</li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-blue"></span>对部署的影响</h4>
+              <ul class="bullet">
+                <li>此文件被 <code style="font-size:11px;color:#a5f3fc">.gitignore</code> 排除，<strong>不会提交到仓库</strong></li>
+                <li>Docker 容器内由 <code style="font-size:11px;color:#a5f3fc">entrypoint.sh</code> 覆盖密钥，此文件仅用于本地开发</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="warn-box">
+            <span class="warn-icon">⚠️</span>
+            <span><strong>安全风险</strong>：<code>SECRET_KEY=123456</code> 极度不安全，任何部署到公网的实例都应替换为强随机密钥。生产环境应通过 <code>entrypoint.sh</code> 的 <code>/secrets/app.env</code> 机制自动生成。</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- .env.example -->
+      <div class="file-card" id="env-example">
+        <div class="file-card-header">
+          <span class="file-path">.env.example</span>
+          <span class="file-badge badge-config">模板</span>
+        </div>
+        <div class="file-card-body">
+          <p style="color:var(--text-muted);font-size:13px">配置模板，供开发者初始化本地 <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px;font-family:monospace;color:#a5f3fc">.env</code> 文件时参考，揭示了所有可注入的配置维度。</p>
+
+          <div class="analysis-grid">
+            <div class="analysis-box full">
+              <h4><span class="dot dot-amber"></span>完整配置维度（超出 .env 现值）</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">DATABASE_URL</span><span class="kv-val">默认 <code>sqlite+aiosqlite:///./xiaoman.db</code>，可替换 PostgreSQL</span></li>
+                <li><span class="kv-key">MILVUS_HOST / PORT</span><span class="kv-val">向量数据库连接配置，<code>USE_MILVUS=false</code> 时忽略</span></li>
+                <li><span class="kv-key">USE_MILVUS</span><span class="kv-val"><code>false</code> → 使用 ChromaDB；<code>true</code> → 使用 Milvus</span></li>
+                <li><span class="kv-key">EMBED_MODEL</span><span class="kv-val"><code>text2vec-base-chinese</code>，控制嵌入模型选择</span></li>
+                <li><span class="kv-key">UPLOAD_DIR</span><span class="kv-val">文件上传存储路径</span></li>
+                <li><span class="kv-key">FEISHU_APP_ID / SECRET / TOKEN</span><span class="kv-val">飞书机器人集成三元凭证</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ 2. Python 后端 ═══════════ -->
+    <div class="section" id="requirements">
+      <div class="section-header">
+        <div class="section-icon icon-py">🐍</div>
+        <h2>2. Python 后端配置</h2>
+      </div>
+
+      <!-- requirements.txt -->
+      <div class="file-card">
+        <div class="file-card-header">
+          <span class="file-path">backend/requirements.txt</span>
+          <span class="file-badge badge-py">Python 依赖</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-blue"></span>核心框架与服务层</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">fastapi==0.115.0</span><span class="kv-val">HTTP/WebSocket 框架</span></li>
+                <li><span class="kv-key">uvicorn[standard]</span><span class="kv-val">ASGI 服务器（含 websockets）</span></li>
+                <li><span class="kv-key">sqlalchemy[asyncio]</span><span class="kv-val">异步 ORM，操作 SQLite</span></li>
+                <li><span class="kv-key">aiosqlite</span><span class="kv-val">SQLite 异步驱动</span></li>
+                <li><span class="kv-key">pydantic / pydantic-settings</span><span class="kv-val">数据验证与配置管理</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-cyan"></span>AI / 向量检索层</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">litellm==1.50.0</span><span class="kv-val">统一调用 100+ LLM 提供商</span></li>
+                <li><span class="kv-key">chromadb>=0.4.22</span><span class="kv-val">本地向量数据库（RAG）</span></li>
+                <li><span class="kv-key">langchain / langchain-community</span><span class="kv-val">文档分割、嵌入流水线</span></li>
+                <li><span class="kv-key">mcp>=1.0.0</span><span class="kv-val">Model Context Protocol 工具调用</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>文档处理层</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">pypdf2</span><span class="kv-val">PDF 解析</span></li>
+                <li><span class="kv-key">python-docx</span><span class="kv-val">Word 文档解析</span></li>
+                <li><span class="kv-key">python-pptx</span><span class="kv-val">PPT 解析</span></li>
+                <li><span class="kv-key">Pillow</span><span class="kv-val">图像处理（OCR 前处理）</span></li>
+                <li><span class="kv-key">python-multipart</span><span class="kv-val">文件上传解析</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>网络与安全层</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">httpx + httpx-sse</span><span class="kv-val">异步 HTTP + SSE 流式请求</span></li>
+                <li><span class="kv-key">duckduckgo-search</span><span class="kv-val">网络搜索工具</span></li>
+                <li><span class="kv-key">python-jose[cryptography]</span><span class="kv-val">JWT 签发与验证</span></li>
+                <li><span class="kv-key">bcrypt</span><span class="kv-val">密码哈希</span></li>
+                <li><span class="kv-key">cryptography</span><span class="kv-val">Fernet 数据加密</span></li>
+                <li><span class="kv-key">lark-oapi</span><span class="kv-val">飞书 SDK</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box full">
+              <h4><span class="dot dot-red"></span>对部署的影响</h4>
+              <ul class="bullet">
+                <li><strong>依赖均已精确锁版本</strong>（或设置下限），有利于可重现构建，但 <code>langchain>=0.1.0</code> 等宽松约束在未来可能引入破坏性变更</li>
+                <li><code>chromadb</code> 会在首次运行时下载模型文件，<strong>镜像体积较大</strong>（可能超过 2GB），需考虑层缓存</li>
+                <li>构建时使用阿里云 pip 镜像（见 Dockerfile），可规避国内网络问题</li>
+                <li>无 <code>torch</code> 直接依赖，通过 langchain-community 间接拉取，CI 镜像构建时间较长</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- config.py -->
+      <div class="file-card" id="config-py">
+        <div class="file-card-header">
+          <span class="file-path">backend/app/config.py</span>
+          <span class="file-badge badge-py">Pydantic Settings</span>
+        </div>
+        <div class="file-card-body">
+          <p style="color:var(--text-muted);font-size:13px">项目的配置核心。使用 <strong>Pydantic BaseSettings</strong> 将环境变量自动映射为类型安全的 Python 属性，所有模块从此处导入 <code style="font-family:monospace;color:#a5f3fc">settings</code> 单例。</p>
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>关键默认值</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">database_url</span><span class="kv-val">绝对路径：<code>backend/xiaoman.db</code></span></li>
+                <li><span class="kv-key">chroma_persist_dir</span><span class="kv-val"><code>backend/chroma_data/</code></span></li>
+                <li><span class="kv-key">upload_dir</span><span class="kv-val"><code>backend/uploads/</code></span></li>
+                <li><span class="kv-key">use_milvus</span><span class="kv-val"><code>False</code> → 默认 ChromaDB</span></li>
+                <li><span class="kv-key">embed_model</span><span class="kv-val"><code>text2vec-base-chinese</code></span></li>
+                <li><span class="kv-key">env_file</span><span class="kv-val">指向项目根 <code>.env</code></span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>路径解析机制</h4>
+              <ul class="bullet">
+                <li>使用 <code>__file__</code> 的 <strong>绝对路径向上回溯</strong> 找到项目根目录，与 CWD 无关</li>
+                <li>保证在 Docker 容器（<code>WORKDIR /app</code>）或本地任意目录运行时路径一致</li>
+                <li><code>extra="ignore"</code>：容忍 .env 中未声明的变量，不抛错</li>
+              </ul>
+            </div>
+            <div class="analysis-box full">
+              <h4><span class="dot dot-cyan"></span>对工作逻辑与结构的影响</h4>
+              <ul class="bullet">
+                <li><strong>单例模式</strong>：模块顶层 <code>settings = Settings()</code> 在进程启动时执行一次，后续 import 复用同一对象，避免重复读取 .env</li>
+                <li><strong>向量数据库切换</strong>：<code>use_milvus</code> 控制运行时选择 ChromaDB（轻量本地）或 Milvus（分布式），无需改代码</li>
+                <li><strong>CORS 列表</strong>：<code>allowed_origins</code> 直接传入 FastAPI CORSMiddleware，控制哪些前端源可调用 API</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ 3. React 前端 ═══════════ -->
+    <div class="section" id="package-json">
+      <div class="section-header">
+        <div class="section-icon icon-react">⚛️</div>
+        <h2>3. React 前端配置</h2>
+      </div>
+
+      <!-- package.json -->
+      <div class="file-card">
+        <div class="file-card-header">
+          <span class="file-path">frontend/package.json</span>
+          <span class="file-badge badge-ts">Node 依赖</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-cyan"></span>核心运行时依赖</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">react + react-dom ^18.3</span><span class="kv-val">UI 框架</span></li>
+                <li><span class="kv-key">antd ^5.21</span><span class="kv-val">Ant Design 组件库</span></li>
+                <li><span class="kv-key">axios ^1.7</span><span class="kv-val">HTTP 客户端，调用后端 API</span></li>
+                <li><span class="kv-key">react-router-dom ^6.27</span><span class="kv-val">SPA 路由</span></li>
+                <li><span class="kv-key">zustand ^5.0</span><span class="kv-val">全局状态管理</span></li>
+                <li><span class="kv-key">react-markdown + remark-gfm</span><span class="kv-val">渲染 AI 回复的 Markdown</span></li>
+                <li><span class="kv-key">dayjs ^1.11</span><span class="kv-val">日期格式化</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-blue"></span>构建工具链（devDependencies）</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">vite ^5.4</span><span class="kv-val">构建工具与开发服务器</span></li>
+                <li><span class="kv-key">@vitejs/plugin-react</span><span class="kv-val">Babel 快速刷新</span></li>
+                <li><span class="kv-key">typescript ^5.6</span><span class="kv-val">类型检查</span></li>
+                <li><span class="kv-key">tailwindcss ^3.4</span><span class="kv-val">原子化 CSS</span></li>
+                <li><span class="kv-key">postcss + autoprefixer</span><span class="kv-val">CSS 后处理</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>构建脚本说明</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">dev</span><span class="kv-val">启动 Vite 开发服务器（:5173）</span></li>
+                <li><span class="kv-key">build</span><span class="kv-val"><code>tsc && vite build</code> → 类型检查后构建</span></li>
+                <li><span class="kv-key">preview</span><span class="kv-val">预览生产构建产物</span></li>
+                <li><span class="kv-key">lint</span><span class="kv-val">ESLint 检查（目前 0 警告容忍）</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>对部署的影响</h4>
+              <ul class="bullet">
+                <li><code>"type": "module"</code>：整个项目使用 ESM，配置文件（vite/tailwind）需 export default</li>
+                <li>无锁文件提交：docker-compose 中每次 <code>npm install</code> 会联网拉取，建议改为多阶段构建</li>
+                <li>antd 5.x 体积较大，需依赖 Vite 的 tree-shaking 控制产物大小</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- vite.config.ts -->
+      <div class="file-card" id="vite-config">
+        <div class="file-card-header">
+          <span class="file-path">frontend/vite.config.ts</span>
+          <span class="file-badge badge-ts">Vite 配置</span>
+        </div>
+        <div class="file-card-body">
+          <p style="color:var(--text-muted);font-size:13px">前后端通信的关键桥梁。开发模式下通过 <strong>反向代理</strong> 将 <code>/api</code> 请求转发到后端，彻底规避 CORS 问题。</p>
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>关键配置项</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">server.port</span><span class="kv-val"><code>5173</code></span></li>
+                <li><span class="kv-key">server.host</span><span class="kv-val"><code>0.0.0.0</code>（局域网可访问）</span></li>
+                <li><span class="kv-key">proxy /api → target</span><span class="kv-val"><code>http://localhost:8000</code></span></li>
+                <li><span class="kv-key">changeOrigin</span><span class="kv-val"><code>true</code>（修改请求 Host 头）</span></li>
+                <li><span class="kv-key">resolve.alias @</span><span class="kv-val">→ <code>./src</code>（路径别名）</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>对工作逻辑的影响</h4>
+              <ul class="bullet">
+                <li>前端代码中 <code>axios.get('/api/...')</code> 不需要写绝对地址，开发/生产保持一致</li>
+                <li><code>@</code> 别名让 import 路径干净，无需 <code>../../../</code> 层层回溯</li>
+                <li><code>host: '0.0.0.0'</code> 使容器内的 Vite 可被宿主机 / 其他容器访问</li>
+              </ul>
+            </div>
+            <div class="analysis-box full">
+              <h4><span class="dot dot-red"></span>注意：生产环境代理失效</h4>
+              <ul class="bullet">
+                <li>Vite proxy 仅在 <code>npm run dev</code> 时有效。<strong>生产构建后</strong>，<code>/api</code> 请求会直接发往浏览器所在域，需要 Nginx 或其他反向代理承担此职责</li>
+                <li>当前 docker-compose 使用的是开发模式（<code>npm run dev</code>），尚无 Nginx 层，生产部署时需补充</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- tsconfig.json -->
+      <div class="file-card" id="tsconfig">
+        <div class="file-card-header">
+          <span class="file-path">frontend/tsconfig.json &amp; tsconfig.node.json</span>
+          <span class="file-badge badge-ts">TypeScript</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-blue"></span>主要编译选项</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">target</span><span class="kv-val"><code>ES2020</code>（现代浏览器）</span></li>
+                <li><span class="kv-key">strict</span><span class="kv-val"><code>true</code>（严格类型检查）</span></li>
+                <li><span class="kv-key">noEmit</span><span class="kv-val"><code>true</code>（TS 不生成 JS，由 Vite 处理）</span></li>
+                <li><span class="kv-key">jsx</span><span class="kv-val"><code>react-jsx</code>（无需手动 import React）</span></li>
+                <li><span class="kv-key">moduleResolution</span><span class="kv-val"><code>bundler</code>（配合 Vite）</span></li>
+                <li><span class="kv-key">paths @/*</span><span class="kv-val"><code>src/*</code>（与 Vite alias 对齐）</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>对工作逻辑的影响</h4>
+              <ul class="bullet">
+                <li><code>strict: true</code> 要求显式类型，减少运行时错误但增加开发摩擦</li>
+                <li><code>noUnusedLocals: false</code> 允许未使用变量，开发体验友好</li>
+                <li><code>tsconfig.node.json</code> 单独为 Vite 配置文件（Node 环境）提供编译上下文，避免 DOM 类型污染</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- tailwind + postcss -->
+      <div class="file-card" id="tailwind">
+        <div class="file-card-header">
+          <span class="file-path">frontend/tailwind.config.ts &amp; postcss.config.js</span>
+          <span class="file-badge badge-ts">CSS 工具链</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>关键配置</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">content</span><span class="kv-val">扫描 <code>src/**/*.{ts,tsx}</code>，tree-shake 未使用的类</span></li>
+                <li><span class="kv-key">preflight: false</span><span class="kv-val">禁用全局 CSS Reset，与 Ant Design 共存</span></li>
+                <li><span class="kv-key">colors.primary</span><span class="kv-val">自定义蓝色主题色梯度</span></li>
+                <li><span class="kv-key">autoprefixer</span><span class="kv-val">自动添加浏览器前缀</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-cyan"></span>对工作逻辑的影响</h4>
+              <ul class="bullet">
+                <li><code>preflight: false</code> 是与 <strong>Ant Design</strong> 共存的关键：若启用 preflight，antd 组件样式会被 Tailwind 的 CSS Reset 重置破坏</li>
+                <li>自定义 <code>primary</code> 色系需要与 antd 的 <code>theme.token</code> 中的 <code>colorPrimary</code> 手动对齐，否则会有色彩不一致</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ 4. 容器化 ═══════════ -->
+    <div class="section" id="dockerfile">
+      <div class="section-header">
+        <div class="section-icon icon-docker">🐳</div>
+        <h2>4. 容器化配置</h2>
+      </div>
+
+      <!-- Dockerfile -->
+      <div class="file-card">
+        <div class="file-card-header">
+          <span class="file-path">backend/Dockerfile</span>
+          <span class="file-badge badge-docker">Docker 镜像</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-blue"></span>构建步骤分析</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">基础镜像</span><span class="kv-val"><code>python:3.11-slim</code>（精简版，减少体积）</span></li>
+                <li><span class="kv-key">WORKDIR</span><span class="kv-val"><code>/app</code></span></li>
+                <li><span class="kv-key">APT 源</span><span class="kv-val">替换为阿里云镜像（国内加速）</span></li>
+                <li><span class="kv-key">pip 源</span><span class="kv-val">阿里云 PyPI 镜像</span></li>
+                <li><span class="kv-key">EXPOSE</span><span class="kv-val"><code>8000</code></span></li>
+                <li><span class="kv-key">ENTRYPOINT</span><span class="kv-val"><code>/app/entrypoint.sh</code></span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>对部署的影响</h4>
+              <ul class="bullet">
+                <li><strong>层缓存优化</strong>：先 COPY <code>requirements.txt</code> 再 pip install，代码变更不触发重新安装依赖</li>
+                <li><strong>无多阶段构建</strong>：<code>build-essential</code> 等编译工具留在最终镜像，增大约 200MB；可用多阶段构建优化</li>
+                <li><strong>无健康检查</strong>：建议添加 <code>HEALTHCHECK</code> 指令</li>
+                <li>挂载了整个 <code>./backend</code> 目录（见 compose），<strong>开发时代码变更实时同步</strong>但生产需去掉挂载</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- entrypoint.sh -->
+      <div class="file-card" id="entrypoint">
+        <div class="file-card-header">
+          <span class="file-path">backend/entrypoint.sh</span>
+          <span class="file-badge badge-shell">Shell 脚本</span>
+        </div>
+        <div class="file-card-body">
+          <p style="color:var(--text-muted);font-size:13px">容器启动入口，实现了 <strong>"首次运行自动生成密钥"</strong> 的 Secrets 引导机制。</p>
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>执行逻辑</h4>
+              <ul class="bullet">
+                <li>检查 <code>/secrets/app.env</code> 是否存在</li>
+                <li>若不存在 → 用 Python 生成 <code>SECRET_KEY</code>（urlsafe token）和 <code>ENCRYPTION_KEY</code>（Fernet）写入文件</li>
+                <li><code>set -a; source /secrets/app.env; set +a</code> → 将密钥注入当前进程环境</li>
+                <li><code>exec uvicorn app.main:app --host 0.0.0.0 --port 8000</code> → 替换 shell 进程（无守护进程）</li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>对部署的影响</h4>
+              <ul class="bullet">
+                <li><code>/secrets</code> 目录映射到 Docker 卷 <code>xiaoman_secrets</code>，密钥跨容器重启持久化</li>
+                <li>密钥只生成一次，<strong>容器替换不丢失密钥</strong>，用户 JWT 不失效</li>
+                <li>本地 <code>.env</code> 的密钥会被 <code>/secrets/app.env</code> 的值<strong>覆盖</strong>（source 后赋值）</li>
+                <li>若 <code>xiaoman_secrets</code> 卷被删除，密钥重新生成，所有 Token 失效</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- docker-compose.yml -->
+      <div class="file-card" id="compose">
+        <div class="file-card-header">
+          <span class="file-path">docker-compose.yml</span>
+          <span class="file-badge badge-docker">容器编排</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-blue"></span>服务拓扑</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">backend</span><span class="kv-val">build <code>./backend</code>，端口 <code>8000:8000</code></span></li>
+                <li><span class="kv-key">frontend</span><span class="kv-val"><code>node:20-alpine</code>，端口 <code>5173:5173</code></span></li>
+                <li><span class="kv-key">网络</span><span class="kv-val"><code>xiaoman-net</code>（bridge），服务间用容器名通信</span></li>
+                <li><span class="kv-key">卷 xiaoman_uploads</span><span class="kv-val">持久化用户上传文件</span></li>
+                <li><span class="kv-key">卷 xiaoman_secrets</span><span class="kv-val">持久化自动生成的密钥</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>关键配置项</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">ALLOWED_ORIGINS</span><span class="kv-val"><code>*</code> ⚠️ 容器中放开所有来源</span></li>
+                <li><span class="kv-key">DATABASE_URL</span><span class="kv-val"><code>sqlite:///./xiaoman.db</code></span></li>
+                <li><span class="kv-key">frontend command</span><span class="kv-val"><code>npm install && npm run dev --host</code></span></li>
+                <li><span class="kv-key">depends_on</span><span class="kv-val">frontend 等待 backend 启动</span></li>
+                <li><span class="kv-key">restart</span><span class="kv-val"><code>unless-stopped</code>（backend）</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box full">
+              <h4><span class="dot dot-red"></span>问题与改进点</h4>
+              <ul class="bullet">
+                <li><strong>ALLOWED_ORIGINS=*</strong>：在容器环境中完全放开 CORS，与 <code>config.py</code> 的限制列表矛盾，生产环境应指定具体域名</li>
+                <li><strong>无 .env 文件注入</strong>：compose 未声明 <code>env_file</code>，飞书等敏感配置未传入容器，需手动补充</li>
+                <li><strong>前端每次启动都 npm install</strong>：生产应改为多阶段构建静态文件 + Nginx 服务</li>
+                <li><strong>无 healthcheck / depends_on condition</strong>：frontend 可能在 backend 就绪前就发出请求</li>
+                <li><strong>无 Milvus 服务定义</strong>：若 <code>USE_MILVUS=true</code>，需手动另外启动 Milvus，compose 文件缺少该服务</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ 5. 版本控制 ═══════════ -->
+    <div class="section" id="gitignore">
+      <div class="section-header">
+        <div class="section-icon icon-other">📁</div>
+        <h2>5. 其他配置</h2>
+      </div>
+
+      <div class="file-card">
+        <div class="file-card-header">
+          <span class="file-path">.gitignore</span>
+          <span class="file-badge badge-config">版本控制</span>
+        </div>
+        <div class="file-card-body">
+          <div class="analysis-grid">
+            <div class="analysis-box">
+              <h4><span class="dot dot-green"></span>关键排除规则</h4>
+              <ul class="kv-list">
+                <li><span class="kv-key">.env</span><span class="kv-val">防止密钥泄漏到仓库</span></li>
+                <li><span class="kv-key">*.db / *.sqlite3</span><span class="kv-val">数据库文件不入库</span></li>
+                <li><span class="kv-key">uploads/</span><span class="kv-val">用户上传文件不入库</span></li>
+                <li><span class="kv-key">backend/chroma_data/</span><span class="kv-val">向量数据库持久化目录</span></li>
+                <li><span class="kv-key">node_modules/</span><span class="kv-val">前端依赖不入库</span></li>
+                <li><span class="kv-key">dist/</span><span class="kv-val">构建产物不入库</span></li>
+                <li><span class="kv-key">.claude/</span><span class="kv-val">Claude Code 本地会话记录</span></li>
+              </ul>
+            </div>
+            <div class="analysis-box">
+              <h4><span class="dot dot-amber"></span>对项目结构的影响</h4>
+              <ul class="bullet">
+                <li><code>.env.example</code> 被提交、<code>.env</code> 被排除 → 正确的机密管理模式</li>
+                <li><code>chroma_data/</code> 排除意味着向量数据库数据需要在部署后重新构建索引</li>
+                <li>缺少 <code>.dockerignore</code>：Docker build context 会包含 <code>node_modules</code>、<code>chroma_data</code> 等大型目录，拖慢构建速度</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 缺失文件说明 -->
+      <div class="file-card">
+        <div class="file-card-header">
+          <span class="file-path">未找到的配置文件</span>
+          <span class="file-badge badge-config">缺失清单</span>
+        </div>
+        <div class="file-card-body">
+          <table class="flow-table">
+            <thead>
+              <tr><th>缺失文件</th><th>影响</th><th>建议</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>.dockerignore</code></td><td>Docker build context 包含 node_modules、chroma_data 等，构建慢</td><td>添加 .dockerignore 排除非必要文件</td></tr>
+              <tr><td><code>nginx.conf</code></td><td>生产环境无反向代理，前端 /api 请求无法正确路由</td><td>添加 Nginx 服务和配置</td></tr>
+              <tr><td><code>.env.production</code></td><td>无法区分生产与开发环境配置</td><td>添加生产环境 .env 模板</td></tr>
+              <tr><td><code>Makefile</code></td><td>无统一的命令入口，开发体验碎片化</td><td>添加 make dev/build/deploy 快捷命令</td></tr>
+              <tr><td><code>.eslintrc</code></td><td>package.json 中有 lint 脚本但无规则文件，lint 行为未定义</td><td>添加 ESLint 配置</td></tr>
+              <tr><td><code>pyproject.toml</code></td><td>Python 项目元数据缺失，无法通过 pip 安装</td><td>如需发布，添加 pyproject.toml</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ 6. 架构总览 ═══════════ -->
+    <div class="section" id="arch">
+      <div class="section-header">
+        <div class="section-icon icon-arch">🗺️</div>
+        <h2>6. 整体配置架构总结</h2>
+      </div>
+
+      <!-- 数据流图 -->
+      <div class="arch-diagram">
+        <div style="text-align:center;color:var(--text-muted);font-size:11px;letter-spacing:1px;text-transform:uppercase;margin-bottom:24px">配置文件关联与数据流向</div>
+
+        <!-- Row 1: 环境变量层 -->
+        <div class="arch-row">
+          <div class="arch-box env" style="min-width:180px">
+            <div class="arch-title">.env / .env.example</div>
+            <div class="arch-sub">密钥 · CORS · 路径 · 飞书凭证</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">→</span><span>Pydantic Settings</span></div>
+          <div class="arch-box env" style="min-width:180px">
+            <div class="arch-title">app/config.py</div>
+            <div class="arch-sub">全局 settings 单例</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">→</span><span>注入所有模块</span></div>
+          <div class="arch-box back" style="min-width:160px">
+            <div class="arch-title">FastAPI App</div>
+            <div class="arch-sub">CORS · Auth · Upload · AI</div>
+          </div>
+        </div>
+
+        <div style="text-align:center;color:var(--text-dim);margin:8px 0">↕ Docker 卷覆盖 (entrypoint.sh → /secrets/app.env)</div>
+
+        <!-- Row 2: 前后端通信 -->
+        <div class="arch-row">
+          <div class="arch-box front" style="min-width:160px">
+            <div class="arch-title">Vite Dev Server</div>
+            <div class="arch-sub">:5173 · React + TS</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">⇄</span><span>/api proxy</span></div>
+          <div class="arch-box back" style="min-width:160px">
+            <div class="arch-title">Uvicorn</div>
+            <div class="arch-sub">:8000 · FastAPI</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">→</span><span>ORM</span></div>
+          <div class="arch-box db" style="min-width:140px">
+            <div class="arch-title">SQLite</div>
+            <div class="arch-sub">xiaoman.db</div>
+          </div>
+        </div>
+
+        <div style="text-align:center;color:var(--text-dim);margin:8px 0">↕ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↕</div>
+
+        <!-- Row 3: CSS工具链 & 向量DB -->
+        <div class="arch-row">
+          <div class="arch-box front" style="min-width:160px">
+            <div class="arch-title">Tailwind + PostCSS</div>
+            <div class="arch-sub">tailwind.config.ts · postcss.config.js</div>
+          </div>
+          <div style="width:160px"></div>
+          <div class="arch-box db" style="min-width:160px">
+            <div class="arch-title">ChromaDB</div>
+            <div class="arch-sub">chroma_data/ · RAG 检索</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">or</span></div>
+          <div class="arch-box ext" style="min-width:140px">
+            <div class="arch-title">Milvus</div>
+            <div class="arch-sub">USE_MILVUS=true</div>
+          </div>
+        </div>
+
+        <div style="text-align:center;color:var(--text-dim);margin:14px 0 6px">Docker Compose 编排层</div>
+
+        <!-- Row 4: Docker -->
+        <div class="arch-row">
+          <div class="arch-box docker" style="min-width:160px">
+            <div class="arch-title">backend 服务</div>
+            <div class="arch-sub">Dockerfile + entrypoint.sh</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">⇄</span><span>xiaoman-net</span></div>
+          <div class="arch-box docker" style="min-width:160px">
+            <div class="arch-title">frontend 服务</div>
+            <div class="arch-sub">node:20-alpine + vite</div>
+          </div>
+          <div class="arch-arrow"><span class="arr">→</span><span>卷</span></div>
+          <div class="arch-box docker" style="min-width:160px">
+            <div class="arch-title">Volumes</div>
+            <div class="arch-sub">uploads · secrets</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 关联关系表 -->
+      <table class="flow-table">
+        <thead>
+          <tr>
+            <th>配置文件</th>
+            <th>影响层</th>
+            <th>关联文件</th>
+            <th>关键数据流</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>.env</code></td>
+            <td><span class="pill pill-green">安全</span><span class="pill pill-blue">API</span></td>
+            <td><code>config.py</code></td>
+            <td>密钥 → Pydantic Settings → JWT Auth / Fernet 加密 / CORS</td>
+          </tr>
+          <tr>
+            <td><code>backend/app/config.py</code></td>
+            <td><span class="pill pill-green">核心</span></td>
+            <td>所有后端模块</td>
+            <td>统一配置出口，<code>settings</code> 单例分发给 DB / AI / 上传 / 飞书等所有子系统</td>
+          </tr>
+          <tr>
+            <td><code>requirements.txt</code></td>
+            <td><span class="pill pill-blue">依赖</span></td>
+            <td><code>Dockerfile</code></td>
+            <td>依赖清单 → Docker 镜像构建层 → 运行时可用 Python 包集合</td>
+          </tr>
+          <tr>
+            <td><code>backend/Dockerfile</code></td>
+            <td><span class="pill pill-cyan">容器</span></td>
+            <td><code>docker-compose.yml</code>, <code>entrypoint.sh</code></td>
+            <td>镜像构建 → entrypoint 生成密钥 → uvicorn 启动</td>
+          </tr>
+          <tr>
+            <td><code>entrypoint.sh</code></td>
+            <td><span class="pill pill-green">安全</span><span class="pill pill-cyan">容器</span></td>
+            <td><code>Dockerfile</code>, <code>docker-compose.yml</code> 卷</td>
+            <td>首次运行生成密钥 → /secrets 卷持久化 → 覆盖 .env 中的弱密钥</td>
+          </tr>
+          <tr>
+            <td><code>docker-compose.yml</code></td>
+            <td><span class="pill pill-cyan">编排</span></td>
+            <td><code>Dockerfile</code>, <code>vite.config.ts</code></td>
+            <td>定义网络 / 端口映射 / 卷 / 环境变量 → 统一拉起前后端</td>
+          </tr>
+          <tr>
+            <td><code>vite.config.ts</code></td>
+            <td><span class="pill pill-blue">网络</span></td>
+            <td><code>package.json</code>, <code>tsconfig.json</code></td>
+            <td>代理 /api → :8000，解决开发期 CORS；路径别名 @ → src/</td>
+          </tr>
+          <tr>
+            <td><code>tailwind.config.ts</code></td>
+            <td><span class="pill pill-green">样式</span></td>
+            <td><code>postcss.config.js</code>, <code>package.json</code></td>
+            <td>content 扫描 → 按需生成 CSS → PostCSS 处理 → 浏览器</td>
+          </tr>
+          <tr>
+            <td><code>tsconfig.json</code></td>
+            <td><span class="pill pill-blue">类型</span></td>
+            <td><code>vite.config.ts</code>, <code>tsconfig.node.json</code></td>
+            <td>严格类型检查 → 构建时拦截类型错误；paths 配置与 Vite alias 对齐</td>
+          </tr>
+          <tr>
+            <td><code>.gitignore</code></td>
+            <td><span class="pill pill-green">安全</span></td>
+            <td><code>.env</code>, <code>uploads/</code>, <code>chroma_data/</code></td>
+            <td>防止密钥 / 数据 / 大文件进入版本控制</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 最终建议 -->
+      <div style="margin-top:32px">
+        <h3 style="font-size:16px;margin-bottom:16px;color:var(--text)">优先改进建议</h3>
+        <div class="analysis-grid">
+          <div class="analysis-box">
+            <h4><span class="dot dot-red"></span>安全类（高优先）</h4>
+            <ul class="bullet">
+              <li>将 <code>.env</code> 中的 <code>SECRET_KEY=123456</code> 替换为强随机密钥</li>
+              <li>compose 中 <code>ALLOWED_ORIGINS=*</code> 改为具体域名</li>
+              <li>compose 中添加 <code>env_file: .env</code> 以传入飞书等凭证</li>
+            </ul>
+          </div>
+          <div class="analysis-box">
+            <h4><span class="dot dot-amber"></span>部署类（中优先）</h4>
+            <ul class="bullet">
+              <li>添加 <code>.dockerignore</code> 排除 node_modules / chroma_data</li>
+              <li>添加 Nginx 服务处理生产环境的 /api 反向代理</li>
+              <li>前端改为多阶段构建 + Nginx 服务静态文件</li>
+              <li>compose 添加 <code>healthcheck</code> 和 <code>depends_on condition: healthy</code></li>
+            </ul>
+          </div>
+          <div class="analysis-box">
+            <h4><span class="dot dot-cyan"></span>工程类（低优先）</h4>
+            <ul class="bullet">
+              <li>添加 <code>.eslintrc</code> 明确前端 lint 规则</li>
+              <li>添加 <code>Makefile</code> 统一 dev/build/deploy 命令</li>
+              <li>锁定 langchain 等宽松版本依赖，添加 <code>pip freeze</code> 锁文件</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<footer>
+  晓曼 Xiaoman 配置架构分析报告 · 生成于 2026-04-07 · 分支 master
+</footer>
+
+</body>
+</html>

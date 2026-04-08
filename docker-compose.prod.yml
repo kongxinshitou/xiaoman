@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: xiaoman-backend
+    expose:
+      - "8000"
+    env_file:
+      - .env.production
+    volumes:
+      - xiaoman_uploads:/app/uploads
+      - xiaoman_chroma:/app/chroma_data
+      - xiaoman_secrets:/secrets
+    restart: unless-stopped
+    networks:
+      - xiaoman-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    build: ./frontend
+    container_name: xiaoman-frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/xiaoman.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - xiaoman-net
+
+volumes:
+  xiaoman_uploads:
+  xiaoman_chroma:
+  xiaoman_secrets:
+
+networks:
+  xiaoman-net:
+    driver: bridge

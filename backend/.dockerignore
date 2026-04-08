@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+chroma_data/
+uploads/
+xiaoman.db
+*.db
+.pytest_cache/
