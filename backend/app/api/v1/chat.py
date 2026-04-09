@@ -197,7 +197,81 @@ async def get_messages(
         .where(ChatMessage.session_id == session_id)
         .order_by(ChatMessage.created_at)
     )
-    return msgs_result.scalars().all()
+    msgs = list(msgs_result.scalars().all())
+
+    # ── Rehydrate inline images for assistant messages ──
+    # chat_service persists a lightweight {id, description} list in meta.images
+    # for each message that yielded image events. On load we need to:
+    #   1. Collect every cited id across the session (from meta.images and
+    #      from any [IMG_xxx] markers in content as a fallback).
+    #   2. Resolve them to DocumentImage rows via exact + prefix match —
+    #      legacy data may have long ids that the LLM cites in short form.
+    #   3. Read base64 from each row's local_path and attach to the message.
+    import json as _json
+    import base64 as _b64
+    import re as _re
+    from app.services.image_lookup import resolve_image_ids
+
+    per_msg_ids: dict = {}  # message_id -> ordered list of cited ids
+    all_cited: set = set()
+
+    for m in msgs:
+        if m.role != "assistant":
+            continue
+        ids_for_msg: list = []
+        try:
+            meta_obj = _json.loads(m.meta or "{}")
+        except Exception:
+            meta_obj = {}
+        for ref in meta_obj.get("images", []) or []:
+            iid = ref.get("id") if isinstance(ref, dict) else None
+            if iid and iid not in ids_for_msg:
+                ids_for_msg.append(iid)
+        # Fallback: catch markers in content even when meta.images is missing
+        # (handles messages written before meta.images was introduced).
+        for marker in _re.findall(r"\[IMG_[^\]]+\]", m.content or ""):
+            iid = marker.strip("[]")
+            if iid and iid not in ids_for_msg:
+                ids_for_msg.append(iid)
+        if ids_for_msg:
+            per_msg_ids[m.id] = ids_for_msg
+            all_cited.update(ids_for_msg)
+
+    cited_to_row = await resolve_image_ids(list(all_cited), db) if all_cited else {}
+
+    # Build response, attaching images per message
+    response: List[MessageRead] = []
+    for m in msgs:
+        record = MessageRead.model_validate(m)
+        ids = per_msg_ids.get(m.id) or []
+        if ids:
+            inflated = []
+            seen: set = set()
+            for cited_id in ids:
+                if cited_id in seen:
+                    continue
+                seen.add(cited_id)
+                row = cited_to_row.get(cited_id)
+                if row is None:
+                    continue
+                b64 = None
+                if row.local_path and os.path.exists(row.local_path):
+                    try:
+                        with open(row.local_path, "rb") as _f:
+                            b64 = _b64.b64encode(_f.read()).decode()
+                    except Exception:
+                        pass
+                # Return the CITED id — that's the key the frontend will
+                # match against the [IMG_xxx] marker in the message content.
+                inflated.append({
+                    "id": cited_id,
+                    "description": row.description or "",
+                    "base64": b64,
+                })
+            if inflated:
+                record.images = inflated  # type: ignore[assignment]
+        response.append(record)
+    return response
 
 
 @router.post("/stream")
@@ -225,6 +299,7 @@ async def stream_chat(
                 provider_id=payload.provider_id,
                 kb_ids=payload.kb_ids,
                 web_search=payload.web_search,
+                image_data_url=payload.image_data_url,
                 db=db,
             ):
                 yield event
@@ -242,3 +317,147 @@ async def stream_chat(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+CHAT_IMAGE_ALLOWED = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
+
+@router.post("/upload-image")
+async def upload_image_for_chat(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload an image to be used as vision input in the next chat message.
+
+    Returns a base64-encoded data URL that the frontend embeds in the message
+    sent to the LLM as an image_url content block.
+    """
+    import base64
+
+    file_ext = os.path.splitext(file.filename or "")[1].lower()
+    if file_ext not in CHAT_IMAGE_ALLOWED:
+        raise HTTPException(status_code=400, detail=f"不支持的图片格式: {file_ext}")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片超过 10MB 限制")
+
+    mime_map = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".png": "image/png", ".webp": "image/webp",
+        ".gif": "image/gif", ".bmp": "image/bmp",
+    }
+    mime = mime_map.get(file_ext, "image/png")
+    b64 = base64.b64encode(content).decode()
+    data_url = f"data:{mime};base64,{b64}"
+
+    return {
+        "filename": file.filename,
+        "data_url": data_url,
+        "mime_type": mime,
+    }
+
+
+@router.post("/transcribe")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Transcribe an uploaded audio file using DashScope paraformer (Tongyi Qianwen).
+
+    Reuses the API key from the configured Qwen LLM provider — no extra credential
+    needed.  Falls back to the DASHSCOPE_API_KEY environment variable if no Qwen
+    provider is configured.
+
+    The frontend uploads a WebM / OGG / WAV blob recorded via MediaRecorder.
+    Returns {"text": "..."}.
+    """
+    import tempfile
+
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="音频超过 20MB 限制")
+
+    file_ext = os.path.splitext(file.filename or "audio.webm")[1].lower() or ".webm"
+
+    with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        text = await _dashscope_asr(tmp_path, file_ext, db)
+    finally:
+        os.unlink(tmp_path)
+
+    return {"text": text, "filename": file.filename}
+
+
+async def _dashscope_asr(audio_path: str, file_ext: str, db: AsyncSession) -> str:
+    """Call DashScope paraformer via the OpenAI-compatible transcription endpoint.
+
+    Priority for API key:
+      1. Configured Qwen LLM provider (provider_type == 'qwen', is_active)
+      2. DASHSCOPE_API_KEY environment variable
+
+    Uses the openai SDK pointed at DashScope's compatible-mode base URL.
+    Model: paraformer-realtime-v2 (supports synchronous file upload transcription).
+    """
+    import os as _os
+    from app.models.llm_provider import LLMProvider
+    from app.services.encryption import decrypt
+
+    # ── 1. Resolve API key ────────────────────────────────────────────────────
+    api_key = ""
+
+    # Prefer the active Qwen provider already configured in the system
+    result = await db.execute(
+        select(LLMProvider).where(
+            LLMProvider.provider_type == "qwen",
+            LLMProvider.is_active == True,
+        ).limit(1)
+    )
+    qwen_provider = result.scalar_one_or_none()
+    if qwen_provider and qwen_provider.encrypted_api_key:
+        try:
+            api_key = decrypt(qwen_provider.encrypted_api_key)
+        except Exception:
+            pass
+
+    # Fallback to env var
+    if not api_key:
+        api_key = _os.environ.get("DASHSCOPE_API_KEY", "")
+
+    if not api_key:
+        return (
+            "[未找到 DashScope API Key。"
+            "请在「模型配置」中添加一个通义千问提供商并启用，"
+            "或在环境变量中设置 DASHSCOPE_API_KEY]"
+        )
+
+    # ── 2. Call DashScope via OpenAI-compatible SDK ───────────────────────────
+    # Use openai SDK with DashScope base URL — it handles multipart formatting correctly.
+    # paraformer-realtime-v2 supports synchronous file-based transcription.
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+
+        with open(audio_path, "rb") as audio_file:
+            audio_filename = f"audio{file_ext}"
+            response = await client.audio.transcriptions.create(
+                model="paraformer-realtime-v2",
+                file=(audio_filename, audio_file),
+            )
+        return response.text or ""
+
+    except Exception as e:
+        err_str = str(e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"DashScope ASR 识别失败: {err_str[:300]}",
+        )

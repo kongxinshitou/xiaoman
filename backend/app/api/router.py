@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, chat, knowledge, llm_providers, embed_providers, ocr_providers, mcp_tools, system, feishu
+from app.api.v1 import auth, chat, knowledge, llm_providers, embed_providers, ocr_providers, mcp_tools, system, feishu, logs
 
 api_router = APIRouter()
 
@@ -12,3 +12,4 @@ api_router.include_router(ocr_providers.router, prefix="/v1/ocr-providers", tags
 api_router.include_router(mcp_tools.router, prefix="/v1/mcp-tools", tags=["mcp-tools"])
 api_router.include_router(system.router, prefix="/v1/system", tags=["system"])
 api_router.include_router(feishu.router, prefix="/v1/feishu", tags=["feishu"])
+api_router.include_router(logs.router, prefix="/v1/logs", tags=["logs"])

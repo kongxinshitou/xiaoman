@@ -72,3 +72,6 @@ logs/
 
 # Vector DB data
 backend/chroma_data/
+
+# Local notes
+bug列表.md

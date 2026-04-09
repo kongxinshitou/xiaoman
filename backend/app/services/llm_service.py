@@ -35,6 +35,52 @@ PROVIDER_FALLBACK_MODELS: Dict[str, List[str]] = {
     "custom": [],
 }
 
+def _model_supports_vision(provider_type: str, model_name: str) -> bool:
+    """Return True if the provider/model combination supports image_url content blocks."""
+    m = model_name.lower()
+    if provider_type == "openai":
+        # GPT-4o, GPT-4-turbo, GPT-4-vision, o1, o3 family all support vision
+        return any(x in m for x in ["gpt-4o", "gpt-4-turbo", "gpt-4v", "vision", "o1", "o3"])
+    elif provider_type == "anthropic":
+        # All Claude 3+ models support vision
+        return True
+    elif provider_type == "qwen":
+        # Only qwen-vl-* models support vision
+        return "vl" in m
+    elif provider_type == "doubao":
+        return "vision" in m
+    elif provider_type == "zhipu":
+        # GLM-4V supports vision
+        return "4v" in m or "vision" in m
+    else:
+        # Unknown provider — assume no vision to avoid API errors
+        return False
+
+
+def _strip_image_content(messages: list) -> list:
+    """Remove image_url blocks from message content; replace with a text notice."""
+    cleaned = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            text_parts = []
+            has_image = False
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    has_image = True
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block["text"])
+                else:
+                    text_parts.append(str(block))
+            new_content = " ".join(text_parts)
+            if has_image:
+                new_content = (new_content + "\n[注：当前模型不支持图片输入，图片已跳过。]").strip()
+            cleaned.append({**msg, "content": new_content})
+        else:
+            cleaned.append(msg)
+    return cleaned
+
+
 MOCK_RESPONSES = [
     "你好！我是晓曼，您的智能运维助手。",
     "我已收到您的消息，正在处理中...",
@@ -94,6 +140,10 @@ async def stream_chat(
             model = f"openai/{provider.model_name}"
         elif provider.provider_type == "custom":
             model = f"openai/{provider.model_name}"
+
+        # Strip image content for models that don't support vision
+        if not _model_supports_vision(provider.provider_type, provider.model_name):
+            messages = _strip_image_content(messages)
 
         kwargs: Dict[str, Any] = {
             "model": model,

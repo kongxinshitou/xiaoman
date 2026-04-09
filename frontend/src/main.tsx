@@ -6,8 +6,10 @@ import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import App from './App'
 import './index.css'
+import { initLogger } from './utils/logger'
 
 dayjs.locale('zh-cn')
+initLogger()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

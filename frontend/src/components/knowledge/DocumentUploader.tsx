@@ -23,7 +23,7 @@ interface FileState {
   error?: string
 }
 
-const ACCEPTED_TYPES = '.txt,.md,.pdf,.docx,.pptx,.jpg,.jpeg,.png,.bmp,.tiff,.gif,.webp'
+const ACCEPTED_TYPES = '.txt,.md,.pdf,.docx,.pptx,.xlsx,.xls,.jpg,.jpeg,.png,.bmp,.tiff,.gif,.webp'
 
 export default function DocumentUploader({ kbId, onUploadComplete }: Props) {
   const [fileStates, setFileStates] = useState<Record<string, FileState>>({})
@@ -89,7 +89,7 @@ export default function DocumentUploader({ kbId, onUploadComplete }: Props) {
             点击或拖拽文件上传
           </Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            支持 PDF、Word、PPT、Markdown、TXT、图片（OCR）
+            支持 PDF、Word、PPT、Excel、Markdown、TXT、图片（OCR）
           </Text>
           <br />
           <Text type="secondary" style={{ fontSize: 11 }}>

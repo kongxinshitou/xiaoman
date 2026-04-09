@@ -1,4 +1,7 @@
+import logging
+import os
 from contextlib import asynccontextmanager
+from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import create_tables, AsyncSessionLocal, engine
@@ -10,6 +13,78 @@ import app.models.embed_provider  # noqa: F401
 import app.models.ocr_provider  # noqa: F401
 import app.models.system_setting  # noqa: F401
 import app.models.feishu_config  # noqa: F401
+import app.models.knowledge  # noqa: F401  (includes DocumentImage)
+
+
+# ── Logging Setup ──────────────────────────────────────────────────────────────
+
+_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+
+
+def _enforce_log_size_limit(log_dir: str, max_bytes: int = 1024 ** 3) -> None:
+    """Delete oldest log files when total directory size exceeds max_bytes."""
+    try:
+        files = []
+        for root, _, fnames in os.walk(log_dir):
+            for fn in fnames:
+                fp = os.path.join(root, fn)
+                files.append((os.path.getmtime(fp), fp))
+        files.sort()
+        total = sum(os.path.getsize(fp) for _, fp in files)
+        while total > max_bytes and files:
+            _, oldest = files.pop(0)
+            size = os.path.getsize(oldest)
+            try:
+                os.remove(oldest)
+            except Exception:
+                pass
+            total -= size
+    except Exception:
+        pass
+
+
+def configure_logging() -> None:
+    """Configure application logging: console + daily rotating file, 7-day retention."""
+    os.makedirs(_LOG_DIR, exist_ok=True)
+    os.makedirs(os.path.join(_LOG_DIR, "frontend"), exist_ok=True)
+
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    root = logging.getLogger()
+    if root.handlers:
+        return  # Already configured (e.g., by uvicorn reload)
+
+    root.setLevel(logging.INFO)
+
+    # Console
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+    ch.setLevel(logging.INFO)
+    root.addHandler(ch)
+
+    # Daily rotating file, keep 7 days
+    fh = TimedRotatingFileHandler(
+        os.path.join(_LOG_DIR, "app.log"),
+        when="midnight",
+        interval=1,
+        backupCount=7,
+        encoding="utf-8",
+    )
+    fh.setFormatter(fmt)
+    fh.setLevel(logging.INFO)
+    root.addHandler(fh)
+
+    # Suppress noisy libraries
+    for lib in ("uvicorn.access", "httpx", "chromadb", "LiteLLM"):
+        logging.getLogger(lib).setLevel(logging.WARNING)
+
+    _enforce_log_size_limit(_LOG_DIR)
+
+
+configure_logging()
 
 
 async def migrate_db():
@@ -18,6 +93,7 @@ async def migrate_db():
         ("knowledge_bases", "embed_api_key_encrypted", "TEXT"),
         ("knowledge_bases", "embed_base_url", "VARCHAR(500)"),
         ("document_chunks", "embedding", "TEXT"),
+        ("document_chunks", "image_ids", "TEXT"),
         ("llm_providers", "supports_vision", "BOOLEAN DEFAULT 0"),
         ("knowledge_bases", "embed_provider_id", "VARCHAR(36)"),
         ("knowledge_bases", "ocr_provider_id", "VARCHAR(36)"),

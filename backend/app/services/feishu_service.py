@@ -108,7 +108,7 @@ def is_duplicate_event(event_id: str) -> bool:
 # ── Feishu API Wrappers ───────────────────────────────────────────────────────
 
 async def send_text_message(token: str, receive_id: str, receive_id_type: str, text: str) -> dict:
-    """Send a plain text message via Feishu IM API."""
+    """Send a plain text message via Feishu IM API. Returns full response (contains message_id)."""
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
             f"{FEISHU_API_BASE}/im/v1/messages",
@@ -116,6 +116,21 @@ async def send_text_message(token: str, receive_id: str, receive_id_type: str, t
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={
                 "receive_id": receive_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": text}),
+            },
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def update_text_message(token: str, message_id: str, text: str) -> dict:
+    """Update (edit) a previously sent Feishu message by message_id."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.patch(
+            f"{FEISHU_API_BASE}/im/v1/messages/{message_id}",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
                 "msg_type": "text",
                 "content": json.dumps({"text": text}),
             },
@@ -246,28 +261,54 @@ async def process_feishu_message_background(
     """
     Background task: process a Feishu message through the agent and reply.
 
-    Uses a fresh DB session (the webhook handler's session is already closed by this point).
-    Consumes the chat_service streaming generator and posts the accumulated reply to Feishu.
+    Sends a "正在思考..." placeholder immediately, then updates it with the actual
+    LLM response once ready.  Uses all active knowledge bases by default.
     """
     from app.services import chat_service
+    from app.models.knowledge import KnowledgeBase
+    from sqlalchemy import select as _select
+
+    app_id = config_snapshot["app_id"]
+    app_secret = encryption.decrypt(config_snapshot["encrypted_app_secret"])
+
+    t0 = time.time()
 
     try:
+        # ── 1. Obtain token and send placeholder ──────────────────────────────
+        token = await get_tenant_access_token(app_id, app_secret)
+        placeholder_resp = await send_text_message(token, chat_id, receive_id_type, "正在思考…")
+        placeholder_msg_id = (
+            placeholder_resp.get("data", {}).get("message_id")
+            if isinstance(placeholder_resp, dict)
+            else None
+        )
+        logger.info(
+            "飞书占位消息已发送: chat_id=%s placeholder_msg_id=%s",
+            chat_id, placeholder_msg_id,
+        )
+
+        # ── 2. Process message through LLM ────────────────────────────────────
         async with db_factory() as db:
             user = await get_or_create_internal_user(db, open_id)
             session = await get_or_create_session(db, chat_id, user.id)
 
-            # Collect full assistant response from the streaming generator
+            # Use all active knowledge bases for Feishu channel
+            kb_result = await db.execute(
+                _select(KnowledgeBase).order_by(KnowledgeBase.created_at)
+            )
+            all_kb_ids = [kb.id for kb in kb_result.scalars().all()]
+
             assistant_content = ""
+            t_llm_start = time.time()
             async for chunk in chat_service.process_message(
                 session_id=session.id,
                 user_message=user_message,
                 user_id=user.id,
                 provider_id=None,
-                kb_ids=None,
+                kb_ids=all_kb_ids if all_kb_ids else None,
                 db=db,
                 web_search=False,
             ):
-                # Parse SSE events to extract text tokens
                 if chunk.startswith("event: token\n"):
                     try:
                         data_line = chunk.split("\n")[1]
@@ -277,13 +318,24 @@ async def process_feishu_message_background(
                     except Exception:
                         pass
 
+            logger.info(
+                "飞书LLM处理完成: chat_id=%s 耗时=%.2fs total=%.2fs",
+                chat_id, time.time() - t_llm_start, time.time() - t0,
+            )
+
         if not assistant_content.strip():
             assistant_content = "（无法生成回复）"
 
-        # Send reply to Feishu
-        app_id = config_snapshot["app_id"]
-        app_secret = encryption.decrypt(config_snapshot["encrypted_app_secret"])
-        token = await get_tenant_access_token(app_id, app_secret)
+        # ── 3. Update placeholder or send new message ─────────────────────────
+        token = await get_tenant_access_token(app_id, app_secret)  # refresh if needed
+        if placeholder_msg_id:
+            try:
+                await update_text_message(token, placeholder_msg_id, assistant_content)
+                logger.info("飞书占位消息已更新: message_id=%s", placeholder_msg_id)
+                return
+            except Exception as e:
+                logger.warning("更新占位消息失败，改为新发消息: %s", e)
+
         await send_text_message(token, chat_id, receive_id_type, assistant_content)
 
     except Exception:
@@ -366,27 +418,51 @@ def _make_ws_message_handler(config_snapshot: dict, bot_open_id: str):
                 return
 
             user_message = content.get("text", "").strip()
+            logger.info("原始消息内容: %r", user_message[:100])
 
             # Group chat: only respond when @mentioned
             if chat_type == "group":
                 mentions = msg.mentions or [] if msg else []
-                mention_open_ids = [getattr(getattr(m, "id", None), "open_id", None) for m in mentions]
-                logger.info("群聊@检查: bot_open_id=%s mention_open_ids=%s", bot_open_id, mention_open_ids)
+                logger.info(
+                    "群聊@检查: bot_open_id=%r mentions_count=%d mentions=%r",
+                    bot_open_id, len(mentions),
+                    [
+                        {
+                            "open_id": getattr(getattr(m, "id", None), "open_id", None),
+                            "name": getattr(m, "name", None),
+                            "key": getattr(m, "key", None),
+                        }
+                        for m in mentions
+                    ],
+                )
 
-                bot_mentioned = any(
-                    (getattr(getattr(m, "id", None), "open_id", None) == bot_open_id)
-                    for m in mentions
-                ) if bot_open_id else len(mentions) > 0
+                if bot_open_id:
+                    # Check by open_id
+                    bot_mentioned = any(
+                        getattr(getattr(m, "id", None), "open_id", None) == bot_open_id
+                        for m in mentions
+                    )
+                    # Fallback: check via "all" key (broadcast @all)
+                    if not bot_mentioned:
+                        bot_mentioned = any(
+                            getattr(m, "key", None) in ("@_user_1", bot_open_id)
+                            for m in mentions
+                        )
+                else:
+                    # No bot_open_id configured: respond if any @mention present
+                    bot_mentioned = len(mentions) > 0
 
                 if not bot_mentioned:
                     logger.info("群聊消息未@机器人，忽略")
                     return
 
-                # Strip @mention text
+                # Strip all @mention text from user message
                 for m in mentions:
                     name = getattr(m, "name", "") or ""
                     if name:
                         user_message = user_message.replace(f"@{name}", "").strip()
+                # Also strip the literal @all or @bot patterns left from markdown
+                user_message = user_message.strip("@").strip()
 
             if not user_message:
                 logger.info("WS消息内容为空，忽略")

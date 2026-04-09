@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.database import Base
 
 
+
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
 
@@ -52,3 +53,19 @@ class DocumentChunk(Base):
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_idx: Mapped[int] = mapped_column(Integer, default=0)
     embedding: Mapped[str] = mapped_column(Text, nullable=True)  # JSON float list
+    image_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list of associated image IDs
+
+
+class DocumentImage(Base):
+    """Stores metadata for images extracted from documents."""
+    __tablename__ = "document_images"
+
+    id: Mapped[str] = mapped_column(String(150), primary_key=True)  # e.g. IMG_report_001_销售趋势图
+    doc_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id"), nullable=False)
+    kb_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    seq_num: Mapped[int] = mapped_column(Integer, default=0)
+    page_num: Mapped[int] = mapped_column(Integer, default=0)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    local_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    source_doc: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

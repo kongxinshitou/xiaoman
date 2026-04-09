@@ -10,7 +10,7 @@ from langchain_core.embeddings import Embeddings
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
-from app.models.knowledge import DocumentChunk, Document
+from app.models.knowledge import DocumentChunk, Document, DocumentImage
 from app.config import settings
 
 if TYPE_CHECKING:
@@ -48,17 +48,21 @@ class LiteLLMEmbeddings(Embeddings):
         self.api_key = api_key
         self.api_base = api_base
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def embed_documents(self, texts: List[str], batch_size: int = 5) -> List[List[float]]:
         import litellm
-        kwargs: Dict[str, Any] = {
-            "model": self.model,
-            "input": texts,
-            "api_key": self.api_key,
-        }
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
-        resp = litellm.embedding(**kwargs)
-        return [item["embedding"] for item in resp.data]
+        results: List[List[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i: i + batch_size]
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "input": batch,
+                "api_key": self.api_key,
+            }
+            if self.api_base:
+                kwargs["api_base"] = self.api_base
+            resp = litellm.embedding(**kwargs)
+            results.extend(item["embedding"] for item in resp.data)
+        return results
 
     def embed_query(self, text: str) -> List[float]:
         return self.embed_documents([text])[0]
@@ -120,9 +124,17 @@ async def index_document(
     db: AsyncSession,
     kb: Optional["KnowledgeBase"] = None,
     embed_provider: Optional["EmbedProvider"] = None,
+    chunk_image_ids: Optional[List[List[str]]] = None,
 ) -> int:
-    """Index document chunks into ChromaDB and SQLite."""
+    """Index document chunks into ChromaDB and SQLite.
+
+    ``chunk_image_ids`` (when provided) is a parallel list to ``chunks`` where
+    each entry holds the image IDs referenced by that chunk.
+    """
     col_name = _collection_name(kb_id)
+
+    if chunk_image_ids is None:
+        chunk_image_ids = [[] for _ in chunks]
 
     # Delete existing chunks for this doc from Chroma
     def _chroma_delete():
@@ -140,9 +152,18 @@ async def index_document(
     # Build embeddings
     embeddings = _build_embeddings(kb, embed_provider)
 
-    # Add to Chroma
+    # Add to Chroma — chunk_image_ids stored as JSON string (Chroma metadata
+    # only accepts scalar str/int/float/bool values, not lists).
     ids = [f"{doc_id}_{i}" for i in range(len(chunks))]
-    metadatas = [{"doc_id": doc_id, "kb_id": kb_id, "chunk_idx": i} for i in range(len(chunks))]
+    metadatas = [
+        {
+            "doc_id": doc_id,
+            "kb_id": kb_id,
+            "chunk_idx": i,
+            "image_ids": json.dumps(chunk_image_ids[i] if i < len(chunk_image_ids) else []),
+        }
+        for i in range(len(chunks))
+    ]
 
     def _chroma_add():
         client = get_chroma_client()
@@ -159,15 +180,17 @@ async def index_document(
 
     await asyncio.to_thread(_chroma_add)
 
-    # Update SQLite DocumentChunk (without embedding column)
+    # Update SQLite DocumentChunk
     await db.execute(delete(DocumentChunk).where(DocumentChunk.doc_id == doc_id))
     for idx, chunk_text in enumerate(chunks):
+        ids_for_chunk = chunk_image_ids[idx] if idx < len(chunk_image_ids) else []
         chunk = DocumentChunk(
             doc_id=doc_id,
             kb_id=kb_id,
             chunk_text=chunk_text,
             chunk_idx=idx,
             embedding=None,
+            image_ids=json.dumps(ids_for_chunk) if ids_for_chunk else None,
         )
         db.add(chunk)
     await db.commit()
@@ -193,6 +216,16 @@ async def search(
         except Exception:
             return []
 
+        def _parse_ids(meta: Dict[str, Any]) -> List[str]:
+            raw = meta.get("image_ids") if meta else None
+            if not raw:
+                return []
+            try:
+                val = json.loads(raw) if isinstance(raw, str) else raw
+                return list(val) if isinstance(val, list) else []
+            except Exception:
+                return []
+
         if embeddings:
             vectorstore = Chroma(
                 collection_name=col_name,
@@ -206,6 +239,7 @@ async def search(
                     "doc_id": doc.metadata.get("doc_id", ""),
                     "chunk_idx": doc.metadata.get("chunk_idx", 0),
                     "score": round(float(1.0 / (1.0 + score)), 4),  # distance to similarity
+                    "image_ids": _parse_ids(doc.metadata or {}),
                 }
                 for doc, score in results
             ]
@@ -223,6 +257,7 @@ async def search(
                         "doc_id": metadata.get("doc_id", ""),
                         "chunk_idx": metadata.get("chunk_idx", 0),
                         "score": round(float(1.0 / (1.0 + distance)), 4),
+                        "image_ids": _parse_ids(metadata),
                     })
             return items
 
@@ -263,3 +298,82 @@ def delete_collection(kb_id: str) -> None:
         client.delete_collection(_collection_name(kb_id))
     except Exception:
         pass
+
+
+async def index_document_with_images(
+    doc_id: str,
+    kb_id: str,
+    chunks: List[str],
+    image_metas: List[Dict[str, Any]],
+    db: AsyncSession,
+    kb=None,
+    embed_provider=None,
+    chunk_image_ids: Optional[List[List[str]]] = None,
+) -> int:
+    """Index document chunks and persist image metadata."""
+    # Store image metadata in SQLite — replace existing rows for this doc.
+    await db.execute(delete(DocumentImage).where(DocumentImage.doc_id == doc_id))
+    seen_ids: set = set()
+    for meta in image_metas:
+        img_id = meta["id"]
+        if img_id in seen_ids:
+            continue  # avoid PK collisions if a description hash repeats
+        seen_ids.add(img_id)
+        img = DocumentImage(
+            id=img_id,
+            doc_id=meta["doc_id"],
+            kb_id=meta["kb_id"],
+            seq_num=meta.get("seq_num", 0),
+            page_num=meta.get("page_num", 0),
+            description=meta.get("description", ""),
+            local_path=meta.get("local_path"),
+            source_doc=meta.get("source_doc", ""),
+        )
+        db.add(img)
+    await db.commit()
+
+    # Index chunks (with image_ids tracking)
+    return await index_document(
+        doc_id,
+        kb_id,
+        chunks,
+        db,
+        kb=kb,
+        embed_provider=embed_provider,
+        chunk_image_ids=chunk_image_ids,
+    )
+
+
+async def get_document_images(doc_ids: List[str], db: AsyncSession) -> Dict[str, Dict[str, Any]]:
+    """Return a mapping of image_id → image metadata for a list of doc_ids."""
+    if not doc_ids:
+        return {}
+    result = await db.execute(
+        select(DocumentImage).where(DocumentImage.doc_id.in_(doc_ids))
+    )
+    images = result.scalars().all()
+    return {
+        img.id: {
+            "id": img.id,
+            "description": img.description,
+            "local_path": img.local_path,
+            "source_doc": img.source_doc,
+            "page_num": img.page_num,
+        }
+        for img in images
+    }
+
+
+async def delete_document_images(doc_id: str, db: AsyncSession) -> None:
+    """Delete document images from SQLite and from the local filesystem."""
+    result = await db.execute(
+        select(DocumentImage).where(DocumentImage.doc_id == doc_id)
+    )
+    for img in result.scalars().all():
+        if img.local_path and __import__("os").path.exists(img.local_path):
+            try:
+                __import__("os").remove(img.local_path)
+            except Exception:
+                pass
+    await db.execute(delete(DocumentImage).where(DocumentImage.doc_id == doc_id))
+    await db.commit()

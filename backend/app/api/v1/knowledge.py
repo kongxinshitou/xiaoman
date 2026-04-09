@@ -1,9 +1,11 @@
 import os
 import uuid
+import logging
+import traceback
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 import aiofiles
@@ -19,19 +21,132 @@ from app.schemas.knowledge import (
     KnowledgeBaseCreate, KnowledgeBaseUpdate, KnowledgeBaseRead,
     DocumentRead, SearchResult,
 )
-from app.services.document_parser import parse_document, IMAGE_EXTENSIONS
-from app.services.rag_service import index_document, delete_document_chunks, search as rag_search, delete_collection
+from app.services.document_parser import parse_document, parse_document_with_media, IMAGE_EXTENSIONS
+from app.services.rag_service import index_document, index_document_with_images, delete_document_chunks, search as rag_search, delete_collection, delete_document_images
 from app.services.encryption import encrypt
-from app.services.ocr_service import ocr_image
+from app.services.ocr_service import ocr_image, get_default_ocr_provider
 from app.services import llm_service
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 ALLOWED_EXTENSIONS = {
     ".txt", ".md", ".pdf", ".docx", ".pptx",
+    ".xlsx", ".xls",
     ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".gif", ".webp",
 }
 
 router = APIRouter()
+
+
+async def _do_index_document(doc_id: str, kb_id: str, file_path: str, file_ext: str) -> None:
+    """Background task: parse, embed, and index a document asynchronously."""
+    from app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Document).where(Document.id == doc_id))
+        doc = result.scalar_one_or_none()
+        if not doc:
+            return
+
+        kb_result = await db.execute(select(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+        kb = kb_result.scalar_one_or_none()
+        if not kb:
+            doc.status = "error"
+            doc.error_msg = "知识库不存在"
+            doc.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            return
+
+        # Mark as processing
+        doc.status = "processing"
+        doc.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        try:
+            if file_ext in IMAGE_EXTENSIONS:
+                # Resolve OCR provider: KB-specific > default > any > vision LLM fallback
+                ocr_provider = None
+                if kb.ocr_provider_id:
+                    ocr_result = await db.execute(
+                        select(OCRProvider).where(OCRProvider.id == kb.ocr_provider_id)
+                    )
+                    ocr_provider = ocr_result.scalar_one_or_none()
+                if ocr_provider is None:
+                    default_ocr = await db.execute(
+                        select(OCRProvider).where(
+                            OCRProvider.is_default == True,
+                            OCRProvider.is_active == True,
+                        ).limit(1)
+                    )
+                    ocr_provider = default_ocr.scalar_one_or_none()
+                if ocr_provider is None:
+                    any_ocr = await db.execute(
+                        select(OCRProvider).where(OCRProvider.is_active == True).limit(1)
+                    )
+                    ocr_provider = any_ocr.scalar_one_or_none()
+                if ocr_provider is None:
+                    ocr_provider = await llm_service.get_default_provider(db)
+                chunks = await ocr_image(file_path, ocr_provider)
+                embed_provider = None
+                if kb.embed_provider_id:
+                    ep_result = await db.execute(
+                        select(EmbedProvider).where(EmbedProvider.id == kb.embed_provider_id)
+                    )
+                    embed_provider = ep_result.scalar_one_or_none()
+                chunk_count = await index_document(doc.id, kb_id, chunks, db, kb=kb, embed_provider=embed_provider)
+            else:
+                # Resolve embed provider
+                embed_provider = None
+                if kb.embed_provider_id:
+                    ep_result = await db.execute(
+                        select(EmbedProvider).where(EmbedProvider.id == kb.embed_provider_id)
+                    )
+                    embed_provider = ep_result.scalar_one_or_none()
+
+                # Resolve vision provider for image description — prefer KB's
+                # configured OCR provider, then any active OCR provider. We use
+                # OCR providers (not LLM providers) because they are explicitly
+                # configured for vision tasks.
+                vision_provider = None
+                if kb.ocr_provider_id:
+                    ocr_result = await db.execute(
+                        select(OCRProvider).where(OCRProvider.id == kb.ocr_provider_id)
+                    )
+                    vision_provider = ocr_result.scalar_one_or_none()
+                if vision_provider is None:
+                    vision_provider = await get_default_ocr_provider(db)
+
+                # Parse document with image/table extraction
+                chunks, doc_images, chunk_image_ids = await parse_document_with_media(
+                    file_path,
+                    doc_id=doc_id,
+                    kb_id=kb_id,
+                    chunk_size=kb.chunk_size,
+                    chunk_overlap=kb.chunk_overlap,
+                    vision_provider=vision_provider,
+                    source_doc=doc.filename,
+                )
+
+                chunk_count = await index_document_with_images(
+                    doc.id, kb_id, chunks, doc_images, db,
+                    kb=kb, embed_provider=embed_provider,
+                    chunk_image_ids=chunk_image_ids,
+                )
+
+            doc.status = "ready"
+            doc.chunk_count = chunk_count
+            doc.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            logger.info("文档分块完成: doc_id=%s filename=%s chunk_count=%d", doc_id, doc.filename, chunk_count)
+
+        except Exception as e:
+            err_detail = traceback.format_exc()
+            logger.error("文档分块失败: doc_id=%s\n%s", doc_id, err_detail)
+            doc.status = "error"
+            doc.error_msg = str(e)[:500]
+            doc.updated_at = datetime.now(timezone.utc)
+            await db.commit()
 
 
 @router.post("", response_model=KnowledgeBaseRead)
@@ -159,6 +274,7 @@ async def list_documents(
 @router.post("/{kb_id}/documents", response_model=DocumentRead)
 async def upload_document(
     kb_id: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -181,7 +297,7 @@ async def upload_document(
     if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"不支持的文件格式: {file_ext}")
 
-    # Save file
+    # Save file to disk
     kb_upload_dir = os.path.join(settings.upload_dir, kb_id)
     os.makedirs(kb_upload_dir, exist_ok=True)
     saved_filename = f"{uuid.uuid4()}{file_ext}"
@@ -190,69 +306,23 @@ async def upload_document(
     async with aiofiles.open(file_path, "wb") as f:
         await f.write(content)
 
-    # Create document record
+    # Create document record with status=pending (file is saved, indexing not yet started)
     doc = Document(
         kb_id=kb_id,
         filename=file.filename,
         file_type=file_ext.lstrip(".") or "txt",
         file_size=file_size,
         file_path=file_path,
-        status="processing",
+        status="pending",
         uploaded_by=current_user.id,
     )
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
 
-    # Parse and index
-    try:
-        if file_ext in IMAGE_EXTENSIONS:
-            # Resolve OCR provider: KB-specific OCRProvider > default OCRProvider > vision LLM fallback
-            ocr_provider = None
-            if kb.ocr_provider_id:
-                ocr_result = await db.execute(
-                    select(OCRProvider).where(OCRProvider.id == kb.ocr_provider_id)
-                )
-                ocr_provider = ocr_result.scalar_one_or_none()
-            if ocr_provider is None:
-                default_ocr = await db.execute(
-                    select(OCRProvider).where(
-                        OCRProvider.is_default == True,
-                        OCRProvider.is_active == True,
-                    ).limit(1)
-                )
-                ocr_provider = default_ocr.scalar_one_or_none()
-            if ocr_provider is None:
-                any_ocr = await db.execute(
-                    select(OCRProvider).where(OCRProvider.is_active == True).limit(1)
-                )
-                ocr_provider = any_ocr.scalar_one_or_none()
-            # Final fallback: use default LLM provider
-            if ocr_provider is None:
-                ocr_provider = await llm_service.get_default_provider(db)
-            chunks = await ocr_image(file_path, ocr_provider)
-        else:
-            chunks = parse_document(file_path, chunk_size=kb.chunk_size, chunk_overlap=kb.chunk_overlap)
-
-        # Resolve embed provider
-        embed_provider = None
-        if kb.embed_provider_id:
-            ep_result = await db.execute(
-                select(EmbedProvider).where(EmbedProvider.id == kb.embed_provider_id)
-            )
-            embed_provider = ep_result.scalar_one_or_none()
-
-        chunk_count = await index_document(doc.id, kb_id, chunks, db, kb=kb, embed_provider=embed_provider)
-        doc.status = "ready"
-        doc.chunk_count = chunk_count
-        doc.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(doc)
-    except Exception as e:
-        doc.status = "error"
-        doc.error_msg = str(e)
-        await db.commit()
-        await db.refresh(doc)
+    # Launch async indexing task — returns immediately so upload shows as "done"
+    background_tasks.add_task(_do_index_document, doc.id, kb_id, file_path, file_ext)
+    logger.info("文件上传成功，异步分块已启动: doc_id=%s filename=%s", doc.id, file.filename)
 
     return doc
 
@@ -271,6 +341,7 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")
     await delete_document_chunks(doc_id, db)
+    await delete_document_images(doc_id, db)
     if doc.file_path and os.path.exists(doc.file_path):
         os.remove(doc.file_path)
     await db.delete(doc)

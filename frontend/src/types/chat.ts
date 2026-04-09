@@ -13,6 +13,12 @@ export interface WebResult {
   snippet: string
 }
 
+export interface ImageInfo {
+  id: string
+  description: string
+  base64: string | null
+}
+
 export interface ChatMessage {
   id: string
   session_id: string
@@ -27,6 +33,8 @@ export interface ChatMessage {
   toolCalls?: ToolCallInfo[]
   webResults?: WebResult[]
   isWebSearching?: boolean
+  images?: ImageInfo[]        // images referenced in this message
+  imageDataUrl?: string       // user-attached image (vision input)
 }
 
 export interface Citation {

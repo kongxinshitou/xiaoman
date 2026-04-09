@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatSession, ChatMessage, Citation, ToolCallInfo, WebResult } from '../types/chat'
+import type { ChatSession, ChatMessage, Citation, ToolCallInfo, WebResult, ImageInfo } from '../types/chat'
 
 interface ChatState {
   sessions: ChatSession[]
@@ -24,6 +24,7 @@ interface ChatState {
   updateLastToolCall: (sessionId: string, toolCall: ToolCallInfo) => void
   addWebResult: (sessionId: string, result: WebResult) => void
   setWebSearching: (sessionId: string, searching: boolean) => void
+  addImage: (sessionId: string, image: ImageInfo) => void
   finalizeMessage: (sessionId: string, messageId: string) => void
 
   setLoading: (loading: boolean) => void
@@ -189,6 +190,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...s.messages,
           [sessionId]: msgs.map((msg) =>
             msg.id === streamingId ? { ...msg, isWebSearching: searching } : msg,
+          ),
+        },
+      }
+    }),
+
+  addImage: (sessionId, image) =>
+    set((s) => {
+      const msgs = s.messages[sessionId] || []
+      const streamingId = s.streamingMessageId
+      if (!streamingId) return {}
+      return {
+        messages: {
+          ...s.messages,
+          [sessionId]: msgs.map((msg) =>
+            msg.id === streamingId
+              ? { ...msg, images: [...(msg.images || []), image] }
+              : msg,
           ),
         },
       }

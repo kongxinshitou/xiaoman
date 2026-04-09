@@ -32,7 +32,7 @@ export default function ChatWindow({ sessionId }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [sessionMessages.length, sessionMessages[sessionMessages.length - 1]?.content])
 
-  const handleSend = async (message: string, webSearch = false) => {
+  const handleSend = async (message: string, webSearch = false, imageDataUrl?: string) => {
     // Optimistically add user message
     const userMsg = {
       id: Date.now().toString(),
@@ -41,6 +41,7 @@ export default function ChatWindow({ sessionId }: Props) {
       content: message,
       meta: '{}',
       created_at: new Date().toISOString(),
+      imageDataUrl,
     }
     addMessage(sessionId, userMsg)
 
@@ -48,6 +49,7 @@ export default function ChatWindow({ sessionId }: Props) {
       providerId: selectedProviderId || undefined,
       kbIds: selectedKbIds.length > 0 ? selectedKbIds : undefined,
       webSearch,
+      imageDataUrl,
     })
   }
 
