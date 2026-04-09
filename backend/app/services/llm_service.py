@@ -5,6 +5,9 @@ from app.models.llm_provider import LLMProvider
 from app.services.encryption import decrypt
 import json
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_CONFIG: Dict[str, Dict[str, Any]] = {
     "openai": {"api_base": None},
@@ -115,13 +118,24 @@ async def stream_chat(
     global _mock_idx
 
     if provider is None:
+        logger.info(
+            "event=llm_call_start provider=none model=mock messages=%d tools=%d",
+            len(messages), len(tools) if tools else 0,
+        )
         # Mock streaming response
         mock = MOCK_RESPONSES[_mock_idx % len(MOCK_RESPONSES)]
         _mock_idx += 1
         for char in mock:
             yield char
             await asyncio.sleep(0.02)
+        logger.info("event=llm_call_end provider=none")
         return
+
+    logger.info(
+        "event=llm_call_start provider=%s model=%s messages=%d tools=%d",
+        provider.provider_type, provider.model_name,
+        len(messages), len(tools) if tools else 0,
+    )
 
     try:
         import litellm
@@ -157,6 +171,10 @@ async def stream_chat(
             kwargs["tools"] = tools
 
         response = await litellm.acompletion(**kwargs)
+        logger.debug(
+            "event=llm_acompletion_returned provider=%s model=%s",
+            provider.provider_type, provider.model_name,
+        )
 
         # Accumulate tool call fragments across chunks
         tool_call_acc: Dict[int, Dict[str, Any]] = {}
@@ -205,7 +223,16 @@ async def stream_chat(
                     }
                 tool_call_acc.clear()
 
+        logger.info(
+            "event=llm_call_end provider=%s model=%s",
+            provider.provider_type, provider.model_name,
+        )
+
     except Exception as e:
+        logger.exception(
+            "event=llm_call_error provider=%s",
+            getattr(provider, "provider_type", "none"),
+        )
         error_msg = f"[LLM错误] {str(e)}"
         for char in error_msg:
             yield char
@@ -213,6 +240,10 @@ async def stream_chat(
     except BaseException as e:
         if isinstance(e, (GeneratorExit, KeyboardInterrupt, SystemExit)):
             raise
+        logger.exception(
+            "event=llm_call_error provider=%s",
+            getattr(provider, "provider_type", "none"),
+        )
         # Python 3.12+: asyncio.TaskGroup wraps CancelledError into BaseExceptionGroup
         if hasattr(e, 'exceptions'):
             causes = [ex for ex in e.exceptions if not isinstance(ex, asyncio.CancelledError)]

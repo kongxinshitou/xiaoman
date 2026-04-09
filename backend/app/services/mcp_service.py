@@ -93,6 +93,7 @@ async def execute_tool_stream(
     tool: MCPTool,
     params: Dict[str, Any],
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    logger.debug("event=mcp_execute_start tool=%s transport=%s", tool.name, tool.transport)
     yield {"status": "connecting", "output": f"正在连接: {tool.server_url}"}
     if tool.transport == "sse":
         async for event in _execute_sse(tool, params):

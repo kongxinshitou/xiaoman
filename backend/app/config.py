@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     upload_dir: str = str(_BACKEND / "uploads")
     max_file_size_mb: int = 50
     allowed_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    xiaoman_chat_log_level: str = "DEBUG"
 
     model_config = {"env_file": str(_ROOT / ".env"), "extra": "ignore"}
 

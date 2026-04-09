@@ -1,9 +1,23 @@
 import json
+import logging
 import uuid
 from typing import AsyncGenerator, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger(__name__)
+
+
+def _fmt_kv(**kwargs) -> str:
+    """Format structured fields as k=v pairs for log messages. Truncates long strings."""
+    parts = []
+    for k, v in kwargs.items():
+        if isinstance(v, str) and len(v) > 200:
+            v = v[:200] + "...(truncated)"
+        parts.append(f"{k}={v}")
+    return " ".join(parts)
+
 
 _TZ_BEIJING = timezone(timedelta(hours=8))
 
@@ -27,6 +41,18 @@ async def process_message(
     web_search: bool = False,
     image_data_url: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
+
+    turn_id = uuid.uuid4().hex[:8]
+    logger.info("event=turn_start " + _fmt_kv(
+        turn_id=turn_id,
+        session_id=session_id,
+        user_id=user_id,
+        provider_id=provider_id or "default",
+        kb_count=len(kb_ids) if kb_ids else 0,
+        web_search=web_search,
+        has_image=bool(image_data_url),
+        msg_len=len(user_message or ""),
+    ))
 
     # Save user message
     user_msg = ChatMessage(
@@ -126,6 +152,11 @@ async def process_message(
                 citations.append({"doc_id": r["doc_id"], "text": r["text"][:120], "score": round(r["score"], 3)})
 
         if context_texts:
+            logger.info("event=rag_context_built " + _fmt_kv(
+                turn_id=turn_id,
+                doc_count=len(context_texts),
+                image_refs=len(referenced_ids),
+            ))
             context = "\n\n---\n\n".join(context_texts[:10])
 
             # Fetch image metadata associated with retrieved docs
@@ -157,19 +188,35 @@ async def process_message(
                 f"\n\n当你调用工具后，请务必根据工具返回的结果，用中文给出完整、清晰的文字回答和总结。"
             )
             messages.insert(0, {"role": "system", "content": system_content})
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("event=system_prompt_injected " + _fmt_kv(
+                    turn_id=turn_id, source="rag", total_len=len(system_content),
+                ))
             for cit in citations[:5]:
                 yield f"event: citation\ndata: {json.dumps(cit, ensure_ascii=False)}\n\n"
         else:
             messages.insert(0, {"role": "system", "content": f"你是晓曼，专业的AI运维助手。当前北京时间：{_beijing_now()}。知识库暂无相关内容，请基于自身知识回答。当你调用工具后，请务必根据工具返回的结果，用中文给出完整、清晰的文字回答和总结。"})
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("event=system_prompt_injected " + _fmt_kv(
+                    turn_id=turn_id, source="rag_empty", total_len=len(messages[0]["content"]),
+                ))
         meta["rag"] = True
     else:
         if not any(m["role"] == "system" for m in messages):
             messages.insert(0, {"role": "system", "content": f"你是晓曼，专业的AI运维助手，擅长 DevOps、SRE、云原生问题。当前北京时间：{_beijing_now()}。请用中文回答。当你调用工具后，请务必根据工具返回的结果，用中文给出完整、清晰的文字回答和总结。"})
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("event=system_prompt_injected " + _fmt_kv(
+                    turn_id=turn_id, source="default", total_len=len(messages[0]["content"]),
+                ))
 
     # ── Web Search ──
     if web_search:
         yield f"event: web_search_start\ndata: {json.dumps({'message': '正在联网搜索...'}, ensure_ascii=False)}\n\n"
         web_results = await search_web(user_message, max_results=5)
+        logger.info("event=web_search " + _fmt_kv(
+            turn_id=turn_id,
+            result_count=len(web_results) if web_results else 0,
+        ))
         if web_results:
             for wr in web_results:
                 yield f"event: web_result\ndata: {json.dumps(wr, ensure_ascii=False)}\n\n"
@@ -182,6 +229,10 @@ async def process_message(
                 messages[0]["content"] = web_system + "\n\n" + messages[0]["content"]
             else:
                 messages.insert(0, {"role": "system", "content": web_system})
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("event=system_prompt_injected " + _fmt_kv(
+                    turn_id=turn_id, source="web", total_len=len(messages[0]["content"]),
+                ))
             meta["web_search"] = True
             meta["web_result_count"] = len(web_results)
         else:
@@ -240,6 +291,13 @@ async def process_message(
             llm_tools = []
         llm_tools.append(feishu_builtin)
 
+    logger.info("event=tools_ready " + _fmt_kv(
+        turn_id=turn_id,
+        tool_count=len(llm_tools) if llm_tools else 0,
+        mcp_tools=len(active_tools),
+        builtin_tools=len(builtin_tool_names),
+    ))
+
     # ── Stream LLM Response (Agentic Loop) ──
     try:
         MAX_TOOL_ITERATIONS = 20
@@ -249,6 +307,20 @@ async def process_message(
             iteration += 1
             tool_calls_this_round = []
             text_this_round = ""
+
+            logger.info("event=iter_start " + _fmt_kv(
+                turn_id=turn_id, iter=iteration, messages=len(messages),
+            ))
+            if logger.isEnabledFor(logging.DEBUG):
+                try:
+                    _dump = json.dumps(messages, ensure_ascii=False)[:8000]
+                except Exception:
+                    _dump = "<unserializable>"
+                logger.debug(
+                    "event=iter_messages_snapshot " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration,
+                    ) + f" messages_json={_dump}"
+                )
 
             async for delta in llm_service.stream_chat(messages, provider, db, tools=llm_tools):
                 if isinstance(delta, dict) and delta.get("type") == "tool_call":
@@ -260,8 +332,45 @@ async def process_message(
                     assistant_content += delta
                     yield f"event: token\ndata: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
 
+            logger.info("event=llm_stream_done " + _fmt_kv(
+                turn_id=turn_id,
+                iter=iteration,
+                text_len=len(text_this_round),
+                tool_calls=len(tool_calls_this_round),
+                stop_reason="tool_calls" if tool_calls_this_round else "stop",
+            ))
+            if logger.isEnabledFor(logging.DEBUG):
+                # Dump the raw assistant text the LLM produced this round.
+                _text_dump = (text_this_round or "")[:8000]
+                logger.debug(
+                    "event=llm_stream_text " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration,
+                    ) + f" text={_text_dump}"
+                )
+                # Dump the tool_calls the LLM produced this round (name + raw arguments).
+                if tool_calls_this_round:
+                    try:
+                        _tc_dump = json.dumps(
+                            [
+                                {"id": tc.get("id"), "name": tc.get("name"), "arguments": tc.get("arguments")}
+                                for tc in tool_calls_this_round
+                            ],
+                            ensure_ascii=False,
+                        )[:4000]
+                    except Exception:
+                        _tc_dump = "<unserializable>"
+                    logger.debug(
+                        "event=llm_stream_tool_calls " + _fmt_kv(
+                            turn_id=turn_id, iter=iteration,
+                            count=len(tool_calls_this_round),
+                        ) + f" tool_calls={_tc_dump}"
+                    )
+
             if not tool_calls_this_round:
                 # LLM returned pure text — done
+                logger.info("event=iter_end_no_tools " + _fmt_kv(
+                    turn_id=turn_id, iter=iteration, reason="text_only",
+                ))
                 break
 
             # Append assistant message with all tool calls from this round
@@ -277,6 +386,11 @@ async def process_message(
                     for tc in tool_calls_this_round
                 ],
             })
+            logger.info("event=msg_append " + _fmt_kv(
+                turn_id=turn_id, iter=iteration, role="assistant",
+                tool_call_count=len(tool_calls_this_round),
+                tool_names=",".join(tc["name"] for tc in tool_calls_this_round),
+            ))
 
             # Execute each tool call and append results
             for tc in tool_calls_this_round:
@@ -284,6 +398,22 @@ async def process_message(
                 tool_args = tc.get("arguments", {})
                 tool_call_id = tc.get("id", str(uuid.uuid4()))
                 tool = tool_map.get(tool_name)
+
+                logger.info("event=tool_call_start " + _fmt_kv(
+                    turn_id=turn_id, iter=iteration,
+                    tool=tool_name, tool_call_id=tool_call_id,
+                    kind="builtin" if tool_name in builtin_tool_names else ("mcp" if tool else "unknown"),
+                ))
+                if logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        _args_dump = json.dumps(tool_args, ensure_ascii=False)[:2000]
+                    except Exception:
+                        _args_dump = str(tool_args)[:2000]
+                    logger.debug(
+                        "event=tool_call_args " + _fmt_kv(
+                            turn_id=turn_id, tool_call_id=tool_call_id,
+                        ) + f" args={_args_dump}"
+                    )
 
                 if tool_name in builtin_tool_names:
                     # Execute built-in Feishu tool natively (no external MCP server)
@@ -296,16 +426,30 @@ async def process_message(
                         "content": tool_output,
                     })
                     meta["tool_name"] = tool_name
+                    logger.info("event=tool_call_end " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration, tool=tool_name,
+                        tool_call_id=tool_call_id, status="ok",
+                        output_len=len(tool_output or ""),
+                    ))
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "event=tool_call_output " + _fmt_kv(
+                                turn_id=turn_id, tool_call_id=tool_call_id,
+                            ) + f" output={(tool_output or '')[:2000]}"
+                        )
                 elif tool:
                     display_name = tool.display_name or tool.name
                     yield f"event: tool_call\ndata: {json.dumps({'tool': display_name, 'status': 'running', 'message': '正在调用工具...'}, ensure_ascii=False)}\n\n"
 
                     tool_output = ""
+                    final_status = "running"
                     async for event in mcp_service.execute_tool_stream(tool, tool_args):
                         status = event["status"]
                         output = event["output"]
                         tool_output += output + "\n"
                         sse_status = "done" if status == "done" else ("error" if status == "error" else "running")
+                        if status in ("done", "error"):
+                            final_status = "ok" if status == "done" else "error"
                         yield f"event: tool_call\ndata: {json.dumps({'tool': display_name, 'status': sse_status, 'message': output}, ensure_ascii=False)}\n\n"
 
                     messages.append({
@@ -314,24 +458,52 @@ async def process_message(
                         "content": tool_output[:20000],
                     })
                     meta["tool_name"] = display_name
+                    logger.info("event=tool_call_end " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration, tool=tool_name,
+                        tool_call_id=tool_call_id, status=final_status,
+                        output_len=len(tool_output),
+                    ))
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "event=tool_call_output " + _fmt_kv(
+                                turn_id=turn_id, tool_call_id=tool_call_id,
+                            ) + f" output={tool_output[:2000]}"
+                        )
                 else:
                     yield f"event: tool_call\ndata: {json.dumps({'tool': tool_name, 'status': 'error', 'message': f'未找到工具: {tool_name}'}, ensure_ascii=False)}\n\n"
+                    _err_content = f"Error: tool '{tool_name}' not found"
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
-                        "content": f"Error: tool '{tool_name}' not found",
+                        "content": _err_content,
                     })
+                    logger.info("event=tool_call_end " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration, tool=tool_name,
+                        tool_call_id=tool_call_id, status="not_found",
+                        output_len=len(_err_content),
+                    ))
             # Loop continues: LLM sees all tool results and decides next step
+
+        if iteration >= MAX_TOOL_ITERATIONS and tool_calls_this_round:
+            logger.warning("event=max_iterations_hit " + _fmt_kv(
+                turn_id=turn_id, iter=iteration, max=MAX_TOOL_ITERATIONS,
+            ))
 
     except BaseException as e:
         if isinstance(e, (GeneratorExit, KeyboardInterrupt, SystemExit)):
             raise
+        logger.exception("event=turn_error " + _fmt_kv(
+            turn_id=turn_id, iter=iteration, exc_type=type(e).__name__,
+        ))
         err_str = str(e)
         yield f"event: error\ndata: {json.dumps({'message': err_str}, ensure_ascii=False)}\n\n"
         assistant_content = f"[错误] {err_str}"
 
     # ── Fallback: force summary if tools were called but no text was generated ──
     if not assistant_content.strip() and meta.get("tool_name"):
+        logger.info("event=fallback_summary_start " + _fmt_kv(
+            turn_id=turn_id, last_tool=meta.get("tool_name"),
+        ))
         try:
             messages.append({
                 "role": "user",
@@ -343,7 +515,7 @@ async def process_message(
                 assistant_content += delta
                 yield f"event: token\ndata: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
         except BaseException:
-            pass
+            logger.exception("event=fallback_summary_error " + _fmt_kv(turn_id=turn_id))
 
     # ── Extract image references from LLM answer and emit image events ──
     # Strategy: scan the assistant content for ALL [IMG_xxx] markers and look
@@ -425,6 +597,15 @@ async def process_message(
         ))
         await db.commit()
     except Exception:
-        pass
+        logger.exception("event=assistant_msg_save_error " + _fmt_kv(turn_id=turn_id))
+
+    logger.info("event=turn_end " + _fmt_kv(
+        turn_id=turn_id,
+        session_id=session_id,
+        assistant_len=len(assistant_content),
+        total_iterations=iteration,
+        image_refs=len(persisted_image_refs),
+        had_error=assistant_content.startswith("[错误]"),
+    ))
 
     yield f"event: done\ndata: {json.dumps({'message_id': assistant_msg_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"

@@ -57,12 +57,22 @@ def configure_logging() -> None:
     if root.handlers:
         return  # Already configured (e.g., by uvicorn reload)
 
+    # Resolve chat/LLM module log level first so handlers can be set permissively
+    # enough to actually emit those records. Other modules inherit root=INFO and
+    # won't produce DEBUG records, so this won't introduce noise.
+    _chat_log_level_name = (settings.xiaoman_chat_log_level or "INFO").upper()
+    if _chat_log_level_name not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+        _chat_log_level_name = "INFO"
+    _chat_log_level = getattr(logging, _chat_log_level_name)
+    # Handlers must allow the most verbose level we want to see anywhere.
+    _handler_level = min(logging.INFO, _chat_log_level)
+
     root.setLevel(logging.INFO)
 
     # Console
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)
-    ch.setLevel(logging.INFO)
+    ch.setLevel(_handler_level)
     root.addHandler(ch)
 
     # Daily rotating file, keep 7 days
@@ -74,12 +84,18 @@ def configure_logging() -> None:
         encoding="utf-8",
     )
     fh.setFormatter(fmt)
-    fh.setLevel(logging.INFO)
+    fh.setLevel(_handler_level)
     root.addHandler(fh)
 
     # Suppress noisy libraries
     for lib in ("uvicorn.access", "httpx", "chromadb", "LiteLLM"):
         logging.getLogger(lib).setLevel(logging.WARNING)
+
+    # Elevate chat/LLM module loggers to capture messages arrays, tool args/outputs.
+    # Set XIAOMAN_CHAT_LOG_LEVEL=DEBUG in .env (or config.py) for full agent tracing.
+    logging.getLogger("app.services.chat_service").setLevel(_chat_log_level)
+    logging.getLogger("app.services.llm_service").setLevel(_chat_log_level)
+    logging.getLogger("app.services.mcp_service").setLevel(_chat_log_level)
 
     _enforce_log_size_limit(_LOG_DIR)
 
