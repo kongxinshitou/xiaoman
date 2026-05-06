@@ -36,7 +36,11 @@ import {
   CloseCircleOutlined,
   CopyOutlined,
   SearchOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
+import UserManagementTab from '../components/permissions/UserManagementTab'
+import DepartmentManagementTab from '../components/permissions/DepartmentManagementTab'
+import { useAuthStore } from '../store/authStore'
 import type { LLMProvider, LLMProviderCreate } from '../types/llm'
 import type { EmbedProvider, EmbedProviderCreate } from '../types/embed'
 import type { OCRProvider, OCRProviderCreate } from '../types/ocr'
@@ -67,6 +71,8 @@ interface SystemStats {
 }
 
 export default function SettingsPage() {
+  const currentUser = useAuthStore((s) => s.user)
+  const isAdmin = currentUser?.role === 'admin'
   const [providers, setProviders] = useState<LLMProvider[]>([])
   const [embedProviders, setEmbedProviders] = useState<EmbedProvider[]>([])
   const [ocrProviders, setOcrProviders] = useState<OCRProvider[]>([])
@@ -960,6 +966,24 @@ export default function SettingsPage() {
         </div>
       ),
     },
+    ...(isAdmin
+      ? [
+          {
+            key: 'permissions',
+            label: <span><TeamOutlined /> 用户与权限</span>,
+            children: (
+              <Tabs
+                tabPosition="left"
+                style={{ minHeight: 400 }}
+                items={[
+                  { key: 'users', label: '用户管理', children: <UserManagementTab /> },
+                  { key: 'depts', label: '部门管理', children: <DepartmentManagementTab /> },
+                ]}
+              />
+            ),
+          },
+        ]
+      : []),
   ]
 
   return (

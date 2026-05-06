@@ -125,6 +125,8 @@ async def index_document(
     kb: Optional["KnowledgeBase"] = None,
     embed_provider: Optional["EmbedProvider"] = None,
     chunk_image_ids: Optional[List[List[str]]] = None,
+    dept: Optional[str] = None,
+    level: Optional[str] = None,
 ) -> int:
     """Index document chunks into ChromaDB and SQLite.
 
@@ -155,15 +157,19 @@ async def index_document(
     # Add to Chroma — chunk_image_ids stored as JSON string (Chroma metadata
     # only accepts scalar str/int/float/bool values, not lists).
     ids = [f"{doc_id}_{i}" for i in range(len(chunks))]
-    metadatas = [
-        {
+    metadatas = []
+    for i in range(len(chunks)):
+        meta: Dict[str, Any] = {
             "doc_id": doc_id,
             "kb_id": kb_id,
             "chunk_idx": i,
             "image_ids": json.dumps(chunk_image_ids[i] if i < len(chunk_image_ids) else []),
         }
-        for i in range(len(chunks))
-    ]
+        if dept:
+            meta["dept"] = dept
+        if level:
+            meta["level"] = level
+        metadatas.append(meta)
 
     def _chroma_add():
         client = get_chroma_client()
@@ -191,6 +197,8 @@ async def index_document(
             chunk_idx=idx,
             embedding=None,
             image_ids=json.dumps(ids_for_chunk) if ids_for_chunk else None,
+            dept=dept,
+            level=level,
         )
         db.add(chunk)
     await db.commit()
@@ -240,6 +248,8 @@ async def search(
                     "chunk_idx": doc.metadata.get("chunk_idx", 0),
                     "score": round(float(1.0 / (1.0 + score)), 4),  # distance to similarity
                     "image_ids": _parse_ids(doc.metadata or {}),
+                    "dept": (doc.metadata or {}).get("dept"),
+                    "level": (doc.metadata or {}).get("level"),
                 }
                 for doc, score in results
             ]
@@ -258,6 +268,8 @@ async def search(
                         "chunk_idx": metadata.get("chunk_idx", 0),
                         "score": round(float(1.0 / (1.0 + distance)), 4),
                         "image_ids": _parse_ids(metadata),
+                        "dept": metadata.get("dept"),
+                        "level": metadata.get("level"),
                     })
             return items
 
@@ -309,6 +321,8 @@ async def index_document_with_images(
     kb=None,
     embed_provider=None,
     chunk_image_ids: Optional[List[List[str]]] = None,
+    dept: Optional[str] = None,
+    level: Optional[str] = None,
 ) -> int:
     """Index document chunks and persist image metadata."""
     # Store image metadata in SQLite — replace existing rows for this doc.
@@ -341,6 +355,8 @@ async def index_document_with_images(
         kb=kb,
         embed_provider=embed_provider,
         chunk_image_ids=chunk_image_ids,
+        dept=dept,
+        level=level,
     )
 
 

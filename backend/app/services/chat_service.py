@@ -29,6 +29,18 @@ from app.models.knowledge import KnowledgeBase
 from app.models.mcp_tool import MCPTool
 from app.services import llm_service, rag_service, mcp_service, ocr_service
 from app.services.web_search_service import search_web
+from app.core.permissions import audit as perm_audit
+from app.core.permissions import confirm as perm_confirm
+from app.core.permissions.gatekeeper import filter_capabilities
+from app.core.permissions.kb_filter import filter_chunks
+from app.core.permissions.policy import (
+    PermissionDenied,
+    UserCtx,
+    can_access,
+    deny_reason,
+    get_policy_index,
+    requires_confirmation,
+)
 
 
 async def process_message(
@@ -40,13 +52,19 @@ async def process_message(
     db: AsyncSession,
     web_search: bool = False,
     image_data_url: Optional[str] = None,
+    user_role: str = "employee",
+    user_dept: Optional[str] = None,
+    confirm_token: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
 
     turn_id = uuid.uuid4().hex[:8]
+    user_ctx = UserCtx(user_id=user_id, role=user_role, dept=user_dept)
     logger.info("event=turn_start " + _fmt_kv(
         turn_id=turn_id,
         session_id=session_id,
         user_id=user_id,
+        user_role=user_role,
+        user_dept=user_dept or "-",
         provider_id=provider_id or "default",
         kb_count=len(kb_ids) if kb_ids else 0,
         web_search=web_search,
@@ -143,6 +161,12 @@ async def process_message(
                 embed_provider = ep_result.scalar_one_or_none()
 
             results = await rag_service.search(user_message, kid, db, top_k=kb.top_k, kb=kb, embed_provider=embed_provider)
+            # Tag each chunk with its kb_id so kb_filter can look up restricted-level
+            # role policies when applicable.
+            for r in results:
+                r.setdefault("kb_id", kid)
+            policy_index = await get_policy_index(db)
+            results = filter_chunks(user_ctx, results, policy_index)
             for r in results:
                 context_texts.append(r["text"])
                 all_doc_ids.append(r["doc_id"])
@@ -291,6 +315,30 @@ async def process_message(
             llm_tools = []
         llm_tools.append(feishu_builtin)
 
+    # ── Gatekeeper: hide tools the user has no permission to invoke ─────────
+    if llm_tools:
+        filtered_tools, _, _ = await filter_capabilities(
+            db, user_ctx, llm_tools, all_skills=[], all_kbs=[]
+        )
+        # Drop tool_map entries for filtered-out tools so executor cannot call them
+        # via stale tool_call ids either.
+        allowed_names = {
+            t["function"]["name"]
+            for t in filtered_tools
+            if isinstance(t, dict) and "function" in t
+        }
+        tool_map = {k: v for k, v in tool_map.items() if k in allowed_names}
+        builtin_tool_names = {n for n in builtin_tool_names if n in allowed_names}
+        llm_tools = filtered_tools or None
+
+    # If a confirm_token was supplied, consume it once — it pre-authorizes a
+    # single execution of the named resource for this turn.
+    pre_confirmed: set[str] = set()
+    if confirm_token:
+        confirmed = perm_confirm.consume(user_id, confirm_token)
+        if confirmed is not None:
+            pre_confirmed.add(str(confirmed.get("__resource__") or ""))
+
     logger.info("event=tools_ready " + _fmt_kv(
         turn_id=turn_id,
         tool_count=len(llm_tools) if llm_tools else 0,
@@ -404,6 +452,67 @@ async def process_message(
                     tool=tool_name, tool_call_id=tool_call_id,
                     kind="builtin" if tool_name in builtin_tool_names else ("mcp" if tool else "unknown"),
                 ))
+
+                # ── Permission gate (defense-in-depth even though the LLM only
+                # sees filtered tools — protects against historic tool_call replay) ──
+                if not await can_access(db, user_ctx, tool_name):
+                    reason = await deny_reason(db, user_ctx, tool_name)
+                    perm_audit.log(
+                        user_id=user_id,
+                        resource=tool_name,
+                        action="write",
+                        params=tool_args if isinstance(tool_args, dict) else {},
+                        result_summary="blocked_by_gatekeeper",
+                        allowed=False,
+                        reason_if_denied=reason,
+                    )
+                    err_msg = f"权限不足，无法调用工具 {tool_name}（原因：{reason}）"
+                    yield f"event: tool_call\ndata: {json.dumps({'tool': tool_name, 'status': 'error', 'message': err_msg}, ensure_ascii=False)}\n\n"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": err_msg,
+                    })
+                    logger.info("event=tool_call_denied " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration, tool=tool_name,
+                        tool_call_id=tool_call_id, reason=reason,
+                    ))
+                    continue
+
+                # ── Two-step confirmation for sensitive operations ──
+                if tool_name not in pre_confirmed and await requires_confirmation(db, tool_name):
+                    params_with_marker = dict(tool_args) if isinstance(tool_args, dict) else {}
+                    params_with_marker["__resource__"] = tool_name
+                    new_token = perm_confirm.issue(user_id, tool_name, params_with_marker)
+                    yield (
+                        "event: confirm_required\n"
+                        "data: " + json.dumps({
+                            "token": new_token,
+                            "resource": tool_name,
+                            "params": tool_args,
+                            "message": f"工具 {tool_name} 是敏感操作，需要二次确认",
+                        }, ensure_ascii=False) + "\n\n"
+                    )
+                    perm_audit.log(
+                        user_id=user_id,
+                        resource=tool_name,
+                        action="write",
+                        params=tool_args if isinstance(tool_args, dict) else {},
+                        result_summary=f"confirm_required token={new_token}",
+                        allowed=False,
+                        reason_if_denied="awaiting_confirmation",
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"工具 {tool_name} 需要用户二次确认；已下发 token，请等待用户回执。",
+                    })
+                    logger.info("event=tool_call_confirm_pending " + _fmt_kv(
+                        turn_id=turn_id, iter=iteration, tool=tool_name,
+                        tool_call_id=tool_call_id, token=new_token,
+                    ))
+                    continue
+
                 if logger.isEnabledFor(logging.DEBUG):
                     try:
                         _args_dump = json.dumps(tool_args, ensure_ascii=False)[:2000]
@@ -426,6 +535,14 @@ async def process_message(
                         "content": tool_output,
                     })
                     meta["tool_name"] = tool_name
+                    perm_audit.log(
+                        user_id=user_id,
+                        resource=tool_name,
+                        action="write",
+                        params=tool_args if isinstance(tool_args, dict) else {},
+                        result_summary=(tool_output or "")[:300],
+                        allowed=True,
+                    )
                     logger.info("event=tool_call_end " + _fmt_kv(
                         turn_id=turn_id, iter=iteration, tool=tool_name,
                         tool_call_id=tool_call_id, status="ok",
@@ -458,6 +575,15 @@ async def process_message(
                         "content": tool_output[:20000],
                     })
                     meta["tool_name"] = display_name
+                    perm_audit.log(
+                        user_id=user_id,
+                        resource=tool_name,
+                        action="write",
+                        params=tool_args if isinstance(tool_args, dict) else {},
+                        result_summary=(tool_output or "")[:300],
+                        allowed=(final_status == "ok"),
+                        reason_if_denied=None if final_status == "ok" else final_status,
+                    )
                     logger.info("event=tool_call_end " + _fmt_kv(
                         turn_id=turn_id, iter=iteration, tool=tool_name,
                         tool_call_id=tool_call_id, status=final_status,

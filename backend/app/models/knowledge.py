@@ -40,6 +40,8 @@ class Document(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     error_msg: Mapped[str] = mapped_column(Text, nullable=True)
     uploaded_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    dept: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, default="internal")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -54,6 +56,8 @@ class DocumentChunk(Base):
     chunk_idx: Mapped[int] = mapped_column(Integer, default=0)
     embedding: Mapped[str] = mapped_column(Text, nullable=True)  # JSON float list
     image_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list of associated image IDs
+    dept: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    level: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
 
 class DocumentImage(Base):

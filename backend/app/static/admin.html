@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>权限策略管理</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    * { box-sizing: border-box; }
+    body { font: 14px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; margin: 0; background: #f6f7f9; color: #222; }
+    header { background: #1f2937; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+    header h1 { margin: 0; font-size: 18px; flex: 1; }
+    nav button { background: transparent; color: #fff; border: 1px solid #374151; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+    nav button.active { background: #2563eb; border-color: #2563eb; }
+    main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .panel { background: #fff; padding: 16px; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); margin-bottom: 16px; }
+    .panel h2 { margin-top: 0; font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f3f4f6; font-weight: 600; font-size: 12px; color: #555; }
+    button { font-size: 13px; padding: 4px 10px; border: 1px solid #d1d5db; background: #fff; border-radius: 4px; cursor: pointer; }
+    button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+    button.danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+    button + button { margin-left: 6px; }
+    input, select, textarea { font: inherit; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; width: 100%; }
+    .filters { display: flex; gap: 8px; margin-bottom: 12px; }
+    .filters select, .filters input { width: auto; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+    .badge.public { background: #d1fae5; color: #065f46; }
+    .badge.internal { background: #dbeafe; color: #1e40af; }
+    .badge.restricted { background: #fee2e2; color: #991b1b; }
+    .badge.off { background: #e5e7eb; color: #6b7280; }
+    /* Modal */
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 100; }
+    .overlay.open { display: flex; }
+    .modal { background: #fff; padding: 20px; border-radius: 8px; min-width: 480px; max-width: 90vw; max-height: 90vh; overflow: auto; }
+    .modal h3 { margin-top: 0; }
+    .form-row { margin-bottom: 12px; }
+    .form-row label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 13px; }
+    .checks { display: flex; flex-wrap: wrap; gap: 6px; }
+    .checks label { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer; font-weight: normal; }
+    .actions { text-align: right; margin-top: 16px; }
+    .login { max-width: 360px; margin: 80px auto; padding: 24px; }
+    .err { color: #b91c1c; font-size: 13px; margin-top: 8px; }
+    pre { background: #f3f4f6; padding: 8px; border-radius: 4px; overflow: auto; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<div class="overlay" id="modal">
+  <div class="modal" id="modal-body"></div>
+</div>
+
+<script>
+const API = (location.origin + '/api/v1');
+const TOKEN_KEY = 'xiaoman_admin_token';
+
+const state = {
+  tab: 'policies',
+  policies: [],
+  depts: [],
+  history: [],
+  filters: { type: '', level: '', dept: '' },
+};
+
+function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const t = token();
+  if (t) headers['Authorization'] = 'Bearer ' + t;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) {
+    clearToken();
+    render();
+    throw new Error('未登录或登录已过期');
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text;
+    try { const j = JSON.parse(text); msg = j.detail?.message || j.detail?.error || j.detail || j.message || text; } catch {}
+    throw new Error(msg);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+async function login(username, password) {
+  const body = new URLSearchParams({ username, password });
+  const res = await fetch(API + '/auth/login', { method: 'POST', body });
+  if (!res.ok) throw new Error('登录失败');
+  const j = await res.json();
+  setToken(j.access_token);
+}
+
+// ── Modal ───────────────────────────────────────────────────────────────
+function openModal(html) {
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+// ── Loaders ─────────────────────────────────────────────────────────────
+async function loadPolicies() {
+  const q = new URLSearchParams();
+  for (const k of ['type', 'level', 'dept']) if (state.filters[k]) q.set(k, state.filters[k]);
+  state.policies = await api('/admin/policies' + (q.toString() ? '?' + q.toString() : ''));
+}
+async function loadDepts() {
+  state.depts = await api('/admin/depts');
+}
+async function loadHistory(name) {
+  state.history = name
+    ? await api('/admin/policies/' + encodeURIComponent(name) + '/history?limit=200')
+    : await api('/admin/audit/changes?limit=200');
+}
+
+// ── Renders ─────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function render() {
+  const root = document.getElementById('app');
+  if (!token()) { root.innerHTML = renderLogin(); return; }
+
+  let body = '';
+  if (state.tab === 'policies') body = renderPolicies();
+  else if (state.tab === 'depts') body = renderDepts();
+  else if (state.tab === 'history') body = renderHistory();
+
+  root.innerHTML = `
+    <header>
+      <h1>权限策略管理</h1>
+      <nav>
+        <button class="${state.tab==='policies'?'active':''}" onclick="go('policies')">策略</button>
+        <button class="${state.tab==='depts'?'active':''}" onclick="go('depts')">部门</button>
+        <button class="${state.tab==='history'?'active':''}" onclick="go('history')">变更历史</button>
+        <button onclick="logout()">登出</button>
+      </nav>
+    </header>
+    <main>${body}</main>
+  `;
+}
+
+function renderLogin() {
+  return `
+    <div class="login panel">
+      <h2>管理员登录</h2>
+      <div class="form-row"><label>用户名</label><input id="u" value="admin" /></div>
+      <div class="form-row"><label>密码</label><input id="p" type="password" /></div>
+      <div class="actions"><button class="primary" onclick="doLogin()">登录</button></div>
+      <div class="err" id="login-err"></div>
+    </div>
+  `;
+}
+
+function renderPolicies() {
+  const rows = state.policies.map(p => `
+    <tr>
+      <td><b>${escapeHtml(p.name)}</b><br><small style="color:#6b7280">${escapeHtml(p.display_name)}</small></td>
+      <td>${escapeHtml(p.type)}</td>
+      <td><span class="badge ${escapeHtml(p.level)}">${escapeHtml(p.level)}</span></td>
+      <td>${(p.allow_dept || []).map(escapeHtml).join(', ') || '—'}</td>
+      <td>${(p.allow_role || []).map(escapeHtml).join(', ') || '—'}</td>
+      <td>${p.write ? 'W' : ''} ${p.require_confirm ? '🔒' : ''}</td>
+      <td>${p.enabled ? '<span class="badge public">启用</span>' : '<span class="badge off">停用</span>'}</td>
+      <td>
+        <button onclick="editPolicy('${escapeHtml(p.name)}')">编辑</button>
+        <button onclick="togglePolicy('${escapeHtml(p.name)}', ${!p.enabled})">${p.enabled ? '停用' : '启用'}</button>
+        <button class="danger" onclick="deletePolicy('${escapeHtml(p.name)}')">删除</button>
+      </td>
+    </tr>
+  `).join('');
+  return `
+    <div class="panel">
+      <div class="filters">
+        <select onchange="state.filters.type=this.value;loadPolicies().then(render)">
+          <option value="">全部类型</option><option value="tool">tool</option><option value="skill">skill</option><option value="knowledge_base">knowledge_base</option>
+        </select>
+        <select onchange="state.filters.level=this.value;loadPolicies().then(render)">
+          <option value="">全部级别</option><option value="public">public</option><option value="internal">internal</option><option value="restricted">restricted</option>
+        </select>
+        <input placeholder="按部门筛选" oninput="state.filters.dept=this.value" onchange="loadPolicies().then(render)" />
+        <button class="primary" onclick="newPolicy()">+ 新建策略</button>
+      </div>
+      <table>
+        <thead><tr><th>名称</th><th>类型</th><th>级别</th><th>部门</th><th>角色</th><th>标记</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:#9ca3af">暂无策略</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderDepts() {
+  const rows = state.depts.map(d => `
+    <tr>
+      <td>${escapeHtml(d.code)}</td>
+      <td>${escapeHtml(d.name)}</td>
+      <td>${d.enabled ? '<span class="badge public">启用</span>' : '<span class="badge off">停用</span>'}</td>
+      <td>
+        <button onclick="editDept('${escapeHtml(d.code)}')">编辑</button>
+        <button class="danger" onclick="deleteDept('${escapeHtml(d.code)}')">删除</button>
+      </td>
+    </tr>
+  `).join('');
+  return `
+    <div class="panel">
+      <div class="filters"><button class="primary" onclick="newDept()">+ 新建部门</button></div>
+      <table>
+        <thead><tr><th>编码</th><th>显示名</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:#9ca3af">暂无部门</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderHistory() {
+  const rows = state.history.map(h => `
+    <tr>
+      <td>${escapeHtml(h.changed_at || '')}</td>
+      <td>${escapeHtml(h.policy_name)}</td>
+      <td>${escapeHtml(h.action)}</td>
+      <td>${escapeHtml(h.changed_by)}</td>
+      <td>${escapeHtml(h.reason)}</td>
+      <td><button onclick='showDiff(${JSON.stringify(JSON.stringify(h))})'>查看</button></td>
+    </tr>
+  `).join('');
+  return `
+    <div class="panel">
+      <div class="filters">
+        <input placeholder="按策略名筛选（留空查全部）" id="hf" />
+        <button onclick="filterHistory()">筛选</button>
+      </div>
+      <table>
+        <thead><tr><th>时间</th><th>策略</th><th>动作</th><th>操作员</th><th>原因</th><th>详情</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:#9ca3af">暂无历史</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ── Actions ─────────────────────────────────────────────────────────────
+window.go = async function(tab) {
+  state.tab = tab;
+  if (tab === 'policies') await loadPolicies();
+  else if (tab === 'depts') await loadDepts();
+  else if (tab === 'history') await loadHistory(null);
+  render();
+};
+
+window.doLogin = async function() {
+  const u = document.getElementById('u').value;
+  const p = document.getElementById('p').value;
+  try { await login(u, p); await loadPolicies(); render(); }
+  catch (e) { document.getElementById('login-err').textContent = e.message; }
+};
+
+window.logout = function() { clearToken(); render(); };
+
+window.filterHistory = async function() {
+  const name = document.getElementById('hf').value.trim() || null;
+  await loadHistory(name);
+  render();
+};
+
+window.showDiff = function(json) {
+  const obj = JSON.parse(json);
+  openModal(`<h3>变更详情</h3><pre>${escapeHtml(JSON.stringify(obj, null, 2))}</pre><div class="actions"><button onclick="closeModal()">关闭</button></div>`);
+};
+
+// ── Department modal ────────────────────────────────────────────────────
+window.newDept = function() {
+  openModal(`
+    <h3>新建部门</h3>
+    <div class="form-row"><label>编码 *</label><input id="m-code" placeholder="finance / sales / rd / hr"></div>
+    <div class="form-row"><label>显示名 *</label><input id="m-name"></div>
+    <div class="actions"><button onclick="closeModal()">取消</button><button class="primary" onclick="submitDept()">保存</button></div>
+    <div class="err" id="m-err"></div>
+  `);
+};
+window.submitDept = async function() {
+  try {
+    await api('/admin/depts', { method: 'POST', body: JSON.stringify({
+      code: document.getElementById('m-code').value.trim(),
+      name: document.getElementById('m-name').value.trim(),
+    })});
+    closeModal();
+    await loadDepts();
+    render();
+  } catch (e) { document.getElementById('m-err').textContent = e.message; }
+};
+window.editDept = async function(code) {
+  const d = state.depts.find(x => x.code === code);
+  if (!d) return;
+  openModal(`
+    <h3>编辑部门 ${escapeHtml(code)}</h3>
+    <div class="form-row"><label>显示名</label><input id="m-name" value="${escapeHtml(d.name)}"></div>
+    <div class="form-row"><label><input type="checkbox" id="m-enabled" ${d.enabled?'checked':''}/> 启用</label></div>
+    <div class="actions"><button onclick="closeModal()">取消</button><button class="primary" onclick="submitDeptEdit('${escapeHtml(code)}')">保存</button></div>
+    <div class="err" id="m-err"></div>
+  `);
+};
+window.submitDeptEdit = async function(code) {
+  try {
+    await api('/admin/depts/' + encodeURIComponent(code), { method: 'PATCH', body: JSON.stringify({
+      name: document.getElementById('m-name').value.trim(),
+      enabled: document.getElementById('m-enabled').checked,
+    })});
+    closeModal();
+    await loadDepts();
+    render();
+  } catch (e) { document.getElementById('m-err').textContent = e.message; }
+};
+window.deleteDept = async function(code) {
+  if (!confirm('确定删除部门 ' + code + '?')) return;
+  await api('/admin/depts/' + encodeURIComponent(code), { method: 'DELETE' });
+  await loadDepts(); render();
+};
+
+// ── Policy modal ────────────────────────────────────────────────────────
+function policyFormHtml(p) {
+  const isEdit = !!p;
+  const v = p || { name:'', display_name:'', description:'', type:'tool', level:'internal', allow_dept:[], allow_role:[], write:false, require_confirm:false, enabled:true };
+  const deptOpts = state.depts.filter(d => d.enabled).map(d =>
+    `<label><input type="checkbox" value="${escapeHtml(d.code)}" ${v.allow_dept.includes(d.code)?'checked':''} class="m-dept"/>${escapeHtml(d.code)}</label>`
+  ).join('');
+  return `
+    <h3>${isEdit ? '编辑' : '新建'}策略</h3>
+    <div class="form-row"><label>资源唯一标识 (name) *</label><input id="m-name" value="${escapeHtml(v.name)}" ${isEdit?'disabled':''} placeholder="salary_query"></div>
+    <div class="form-row"><label>显示名 *</label><input id="m-dn" value="${escapeHtml(v.display_name)}" placeholder="薪资查询工具"></div>
+    <div class="form-row"><label>描述</label><textarea id="m-desc" rows="2">${escapeHtml(v.description||'')}</textarea></div>
+    <div class="form-row"><label>类型 *</label>
+      <select id="m-type">
+        <option value="tool" ${v.type==='tool'?'selected':''}>tool</option>
+        <option value="skill" ${v.type==='skill'?'selected':''}>skill</option>
+        <option value="knowledge_base" ${v.type==='knowledge_base'?'selected':''}>knowledge_base</option>
+      </select>
+    </div>
+    <div class="form-row"><label>访问级别 *</label>
+      <select id="m-level" onchange="onLevelChange()">
+        <option value="public" ${v.level==='public'?'selected':''}>public（全员）</option>
+        <option value="internal" ${v.level==='internal'?'selected':''}>internal（按部门）</option>
+        <option value="restricted" ${v.level==='restricted'?'selected':''}>restricted（按部门+角色）</option>
+      </select>
+    </div>
+    <div class="form-row" id="dept-row" style="display:none">
+      <label>允许的部门</label>
+      <div class="checks">${deptOpts || '<i style="color:#9ca3af">请先到「部门」标签创建部门</i>'}</div>
+    </div>
+    <div class="form-row" id="role-row" style="display:none">
+      <label>允许的角色</label>
+      <div class="checks">
+        <label><input type="checkbox" value="employee" class="m-role" ${v.allow_role.includes('employee')?'checked':''}/>employee</label>
+        <label><input type="checkbox" value="manager"  class="m-role" ${v.allow_role.includes('manager') ?'checked':''}/>manager</label>
+        <label><input type="checkbox" value="admin"    class="m-role" ${v.allow_role.includes('admin')   ?'checked':''}/>admin</label>
+      </div>
+    </div>
+    <div class="form-row" id="flags-row" style="display:none">
+      <label><input type="checkbox" id="m-write" ${v.write?'checked':''}/> 写操作</label> &nbsp;
+      <label><input type="checkbox" id="m-confirm" ${v.require_confirm?'checked':''}/> 需要二次确认</label>
+    </div>
+    <div class="form-row"><label>变更原因 *（必填）</label><input id="m-reason" placeholder="为什么修改这条策略"></div>
+    <div class="actions"><button onclick="closeModal()">取消</button><button class="primary" onclick="submitPolicy(${isEdit?`'${escapeHtml(v.name)}'`:'null'})">保存</button></div>
+    <div class="err" id="m-err"></div>
+  `;
+}
+window.onLevelChange = function() {
+  const lvl = document.getElementById('m-level').value;
+  document.getElementById('dept-row').style.display = (lvl === 'internal' || lvl === 'restricted') ? '' : 'none';
+  document.getElementById('role-row').style.display = (lvl === 'restricted') ? '' : 'none';
+  document.getElementById('flags-row').style.display = (lvl === 'restricted') ? '' : 'none';
+};
+window.newPolicy = function() { openModal(policyFormHtml(null)); onLevelChange(); };
+window.editPolicy = function(name) {
+  const p = state.policies.find(x => x.name === name);
+  if (!p) return;
+  openModal(policyFormHtml(p));
+  onLevelChange();
+};
+function readPolicyForm() {
+  const allow_dept = Array.from(document.querySelectorAll('.m-dept:checked')).map(e => e.value);
+  const allow_role = Array.from(document.querySelectorAll('.m-role:checked')).map(e => e.value);
+  return {
+    name: document.getElementById('m-name').value.trim(),
+    display_name: document.getElementById('m-dn').value.trim(),
+    description: document.getElementById('m-desc').value.trim(),
+    type: document.getElementById('m-type').value,
+    level: document.getElementById('m-level').value,
+    allow_dept, allow_role,
+    write: document.getElementById('m-write').checked,
+    require_confirm: document.getElementById('m-confirm').checked,
+    enabled: true,
+    reason: document.getElementById('m-reason').value.trim(),
+  };
+}
+window.submitPolicy = async function(name) {
+  try {
+    const data = readPolicyForm();
+    if (!data.reason) throw new Error('reason 必填');
+    if (name) {
+      const { name: _n, ...changes } = data;
+      await api('/admin/policies/' + encodeURIComponent(name), { method: 'PATCH', body: JSON.stringify(changes) });
+    } else {
+      await api('/admin/policies', { method: 'POST', body: JSON.stringify(data) });
+    }
+    closeModal();
+    await loadPolicies();
+    render();
+  } catch (e) { document.getElementById('m-err').textContent = e.message; }
+};
+window.togglePolicy = async function(name, target) {
+  const reason = prompt('请输入变更原因：');
+  if (!reason) return;
+  await api('/admin/policies/' + encodeURIComponent(name) + '/toggle', { method: 'POST', body: JSON.stringify({ enabled: target, reason }) });
+  await loadPolicies(); render();
+};
+window.deletePolicy = async function(name) {
+  const reason = prompt('请输入删除原因：');
+  if (!reason) return;
+  await api('/admin/policies/' + encodeURIComponent(name), { method: 'DELETE', body: JSON.stringify({ reason }) });
+  await loadPolicies(); render();
+};
+
+// ── Init ────────────────────────────────────────────────────────────────
+(async function init() {
+  if (token()) { try { await loadPolicies(); await loadDepts(); } catch {} }
+  render();
+})();
+</script>
+</body>
+</html>

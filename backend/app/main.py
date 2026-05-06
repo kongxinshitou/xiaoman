@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.database import create_tables, AsyncSessionLocal, engine
 from app.api.router import api_router
 from app.config import settings
@@ -14,6 +15,7 @@ import app.models.ocr_provider  # noqa: F401
 import app.models.system_setting  # noqa: F401
 import app.models.feishu_config  # noqa: F401
 import app.models.knowledge  # noqa: F401  (includes DocumentImage)
+import app.models.policy  # noqa: F401  (Department, ResourcePolicy, PolicyChange, PolicyVersion)
 
 
 # ── Logging Setup ──────────────────────────────────────────────────────────────
@@ -117,6 +119,11 @@ async def migrate_db():
         ("knowledge_bases", "chunk_overlap", "INTEGER DEFAULT 50"),
         ("knowledge_bases", "top_k", "INTEGER DEFAULT 5"),
         ("feishu_config", "connection_mode", "VARCHAR(20) DEFAULT 'webhook'"),
+        ("users", "dept", "VARCHAR(32)"),
+        ("documents", "dept", "VARCHAR(32)"),
+        ("documents", "level", "VARCHAR(16) DEFAULT 'internal'"),
+        ("document_chunks", "dept", "VARCHAR(32)"),
+        ("document_chunks", "level", "VARCHAR(16)"),
     ]
     async with engine.begin() as conn:
         for table, column, col_type in new_columns:
@@ -126,6 +133,13 @@ async def migrate_db():
                 )
             except Exception:
                 pass  # Column already exists
+        # One-time role remap: legacy 'member' -> 'employee'
+        try:
+            await conn.exec_driver_sql(
+                "UPDATE users SET role = 'employee' WHERE role = 'member'"
+            )
+        except Exception:
+            pass
 
 
 async def seed_default_data():
@@ -185,6 +199,11 @@ register_exception_handlers(app)
 
 # Include routers
 app.include_router(api_router, prefix="/api")
+
+# Mount the single-file admin UI (vanilla HTML + fetch).
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/admin/ui", StaticFiles(directory=_STATIC_DIR, html=True), name="admin-ui")
 
 
 @app.get("/")

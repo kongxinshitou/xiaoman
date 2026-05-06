@@ -52,3 +52,4 @@ class ChatRequest(BaseModel):
     stream: bool = True
     web_search: bool = False
     image_data_url: Optional[str] = None  # base64 data URL for vision input
+    confirm_token: Optional[str] = None   # token returned by a prior require_confirm tool call

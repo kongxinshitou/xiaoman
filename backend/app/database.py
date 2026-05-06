@@ -18,6 +18,7 @@ async def create_tables():
     import app.models.embed_provider  # noqa: F401
     import app.models.ocr_provider  # noqa: F401
     import app.models.system_setting  # noqa: F401
+    import app.models.policy  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

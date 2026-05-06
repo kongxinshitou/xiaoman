@@ -5,7 +5,7 @@ import traceback
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 import aiofiles
@@ -39,7 +39,14 @@ ALLOWED_EXTENSIONS = {
 router = APIRouter()
 
 
-async def _do_index_document(doc_id: str, kb_id: str, file_path: str, file_ext: str) -> None:
+async def _do_index_document(
+    doc_id: str,
+    kb_id: str,
+    file_path: str,
+    file_ext: str,
+    dept: Optional[str] = None,
+    level: Optional[str] = None,
+) -> None:
     """Background task: parse, embed, and index a document asynchronously."""
     from app.database import AsyncSessionLocal
 
@@ -94,7 +101,11 @@ async def _do_index_document(doc_id: str, kb_id: str, file_path: str, file_ext: 
                         select(EmbedProvider).where(EmbedProvider.id == kb.embed_provider_id)
                     )
                     embed_provider = ep_result.scalar_one_or_none()
-                chunk_count = await index_document(doc.id, kb_id, chunks, db, kb=kb, embed_provider=embed_provider)
+                chunk_count = await index_document(
+                    doc.id, kb_id, chunks, db,
+                    kb=kb, embed_provider=embed_provider,
+                    dept=dept, level=level,
+                )
             else:
                 # Resolve embed provider
                 embed_provider = None
@@ -132,6 +143,7 @@ async def _do_index_document(doc_id: str, kb_id: str, file_path: str, file_ext: 
                     doc.id, kb_id, chunks, doc_images, db,
                     kb=kb, embed_provider=embed_provider,
                     chunk_image_ids=chunk_image_ids,
+                    dept=dept, level=level,
                 )
 
             doc.status = "ready"
@@ -276,6 +288,8 @@ async def upload_document(
     kb_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    dept: Optional[str] = Form(None),
+    level: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -297,6 +311,12 @@ async def upload_document(
     if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"不支持的文件格式: {file_ext}")
 
+    # Validate permission metadata if provided
+    if level is not None and level not in ("public", "internal", "restricted"):
+        raise HTTPException(status_code=400, detail="level 必须是 public/internal/restricted")
+    if level is None:
+        level = "internal"  # safe default — admin must explicitly mark public
+
     # Save file to disk
     kb_upload_dir = os.path.join(settings.upload_dir, kb_id)
     os.makedirs(kb_upload_dir, exist_ok=True)
@@ -315,14 +335,19 @@ async def upload_document(
         file_path=file_path,
         status="pending",
         uploaded_by=current_user.id,
+        dept=dept,
+        level=level,
     )
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
 
     # Launch async indexing task — returns immediately so upload shows as "done"
-    background_tasks.add_task(_do_index_document, doc.id, kb_id, file_path, file_ext)
-    logger.info("文件上传成功，异步分块已启动: doc_id=%s filename=%s", doc.id, file.filename)
+    background_tasks.add_task(_do_index_document, doc.id, kb_id, file_path, file_ext, dept, level)
+    logger.info(
+        "文件上传成功，异步分块已启动: doc_id=%s filename=%s dept=%s level=%s",
+        doc.id, file.filename, dept, level,
+    )
 
     return doc
 

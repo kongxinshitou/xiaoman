@@ -7,6 +7,7 @@ interface User {
   username: string
   email: string | null
   role: string
+  dept?: string | null
   is_active: boolean
 }
 

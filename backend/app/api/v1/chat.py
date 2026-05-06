@@ -296,10 +296,13 @@ async def stream_chat(
                 session_id=payload.session_id,
                 user_message=payload.message,
                 user_id=current_user.id,
+                user_role=current_user.role,
+                user_dept=current_user.dept,
                 provider_id=payload.provider_id,
                 kb_ids=payload.kb_ids,
                 web_search=payload.web_search,
                 image_data_url=payload.image_data_url,
+                confirm_token=payload.confirm_token,
                 db=db,
             ):
                 yield event
